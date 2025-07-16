@@ -901,12 +901,6 @@ get_vport_type(const struct dpif_netlink_vport *vport)
     case OVS_VPORT_TYPE_VXLAN:
         return "vxlan";
 
-    case OVS_VPORT_TYPE_LISP:
-        return "lisp";
-
-    case OVS_VPORT_TYPE_STT:
-        return "stt";
-
     case OVS_VPORT_TYPE_ERSPAN:
         return "erspan";
 
@@ -942,14 +936,10 @@ netdev_to_ovs_vport_type(const char *type)
         return OVS_VPORT_TYPE_NETDEV;
     } else if (!strcmp(type, "internal")) {
         return OVS_VPORT_TYPE_INTERNAL;
-    } else if (strstr(type, "stt")) {
-        return OVS_VPORT_TYPE_STT;
     } else if (!strcmp(type, "geneve")) {
         return OVS_VPORT_TYPE_GENEVE;
     } else if (!strcmp(type, "vxlan")) {
         return OVS_VPORT_TYPE_VXLAN;
-    } else if (!strcmp(type, "lisp")) {
-        return OVS_VPORT_TYPE_LISP;
     } else if (!strcmp(type, "erspan")) {
         return OVS_VPORT_TYPE_ERSPAN;
     } else if (!strcmp(type, "ip6erspan")) {
@@ -2031,6 +2021,10 @@ dpif_netlink_encode_execute(int dp_ifindex, const struct dpif_execute *d_exec,
     if (d_exec->hash) {
         nl_msg_put_u64(buf, OVS_PACKET_ATTR_HASH, d_exec->hash);
     }
+
+    if (d_exec->upcall_pid) {
+        nl_msg_put_u32(buf, OVS_PACKET_ATTR_UPCALL_PID, d_exec->upcall_pid);
+    }
 }
 
 /* Executes, against 'dpif', up to the first 'n_ops' operations in 'ops'.
@@ -2997,6 +2991,7 @@ dpif_netlink_recv_windows(struct dpif_netlink *dpif, uint32_t handler_id,
 
             error = parse_odp_packet(buf, upcall, &dp_ifindex);
             if (!error && dp_ifindex == dpif->dp_ifindex) {
+                upcall->pid = 0;
                 return 0;
             } else if (error) {
                 return error;
@@ -3047,6 +3042,7 @@ dpif_netlink_recv_cpu_dispatch(struct dpif_netlink *dpif, uint32_t handler_id,
 
         error = parse_odp_packet(buf, upcall, &dp_ifindex);
         if (!error && dp_ifindex == dpif->dp_ifindex) {
+            upcall->pid = nl_sock_pid(handler->sock);
             return 0;
         } else if (error) {
             return error;
@@ -3123,6 +3119,7 @@ dpif_netlink_recv_vport_dispatch(struct dpif_netlink *dpif,
 
             error = parse_odp_packet(buf, upcall, &dp_ifindex);
             if (!error && dp_ifindex == dpif->dp_ifindex) {
+                upcall->pid = nl_sock_pid(ch->sock);
                 return 0;
             } else if (error) {
                 return error;

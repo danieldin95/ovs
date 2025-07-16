@@ -193,6 +193,7 @@ static void bond_update_post_recirc_rules__(struct bond *, bool force)
 static bool bond_is_falling_back_to_ab(const struct bond *);
 static void bond_add_lb_output_buckets(const struct bond *);
 static void bond_del_lb_output_buckets(const struct bond *);
+static bool bond_is_balanced(const struct bond *bond) OVS_REQ_RDLOCK(rwlock);
 
 
 /* Attempts to parse 's' as the name of a bond balancing mode.  If successful,
@@ -246,7 +247,7 @@ bond_create(const struct bond_settings *s, struct ofproto_dpif *ofproto)
     ovs_refcount_init(&bond->ref_cnt);
     hmap_init(&bond->pr_rule_ops);
 
-    bond->active_member_mac = eth_addr_zero;
+    bond->active_member_mac = s->active_member_mac;
     bond->active_member_changed = false;
     bond->primary = NULL;
 
@@ -549,6 +550,7 @@ bond_find_member_by_mac(const struct bond *bond, const struct eth_addr mac)
 
 static void
 bond_active_member_changed(struct bond *bond)
+    OVS_REQ_WRLOCK(rwlock)
 {
     if (bond->active_member) {
         struct eth_addr mac;
@@ -558,6 +560,9 @@ bond_active_member_changed(struct bond *bond)
         bond->active_member_mac = eth_addr_zero;
     }
     bond->active_member_changed = true;
+    if (!bond_is_balanced(bond)) {
+        bond->bond_revalidate = true;
+    }
     seq_change(connectivity_seq_get());
 }
 
@@ -1121,7 +1126,7 @@ bond_get_recirc_id_and_hash_basis(struct bond *bond, uint32_t *recirc_id,
 /* Rebalancing. */
 
 static bool
-bond_is_balanced(const struct bond *bond) OVS_REQ_RDLOCK(rwlock)
+bond_is_balanced(const struct bond *bond)
 {
     return bond->rebalance_interval
         && (bond->balance == BM_SLB || bond->balance == BM_TCP)
@@ -1192,13 +1197,13 @@ bond_shift_load(struct bond_entry *hash, struct bond_member *to)
     struct bond *bond = from->bond;
     uint64_t delta = hash->tx_bytes;
 
-    VLOG_INFO("bond %s: shift %"PRIu64"kB of load (with hash %"PRIdPTR") "
-              "from %s to %s (now carrying %"PRIu64"kB and "
-              "%"PRIu64"kB load, respectively)",
-              bond->name, delta / 1024, hash - bond->hash,
-              from->name, to->name,
-              (from->tx_bytes - delta) / 1024,
-              (to->tx_bytes + delta) / 1024);
+    VLOG_DBG("bond %s: shift %"PRIu64"kB of load (with hash %"PRIdPTR") "
+             "from %s to %s (now carrying %"PRIu64"kB and "
+             "%"PRIu64"kB load, respectively)",
+             bond->name, delta / 1024, hash - bond->hash,
+             from->name, to->name,
+             (from->tx_bytes - delta) / 1024,
+             (to->tx_bytes + delta) / 1024);
 
     /* Shift load away from 'from' to 'to'. */
     from->tx_bytes -= delta;
@@ -1429,8 +1434,24 @@ bond_rebalance(struct bond *bond)
         e->tx_bytes /= 2;
     }
 
-    if (use_recirc && rebalanced) {
-        bond_update_post_recirc_rules__(bond,true);
+    if (rebalanced) {
+        struct ds member_stats = DS_EMPTY_INITIALIZER;
+        int i = 0;
+
+        HMAP_FOR_EACH (member, hmap_node, &bond->members) {
+            if (++i > 1) {
+                ds_put_cstr(&member_stats, " and ");
+            }
+            ds_put_format(&member_stats, "%s:%"PRIu64"kB", member->name,
+                          member->tx_bytes / 1024);
+        }
+        VLOG_INFO("bond %s: rebalanced (now carrying: %s)",
+                  bond->name, ds_cstr(&member_stats));
+        ds_destroy(&member_stats);
+
+        if (use_recirc) {
+            bond_update_post_recirc_rules__(bond, true);
+        }
     }
 
 done:
@@ -1725,7 +1746,6 @@ bond_unixctl_set_active_member(struct unixctl_conn *conn,
     }
 
     if (bond->active_member != member) {
-        bond->bond_revalidate = true;
         bond->active_member = member;
         VLOG_INFO("bond %s: active member is now %s",
                   bond->name, member->name);

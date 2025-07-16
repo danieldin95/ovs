@@ -40,7 +40,6 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
-#include <sys/utsname.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <net/route.h>
@@ -90,6 +89,8 @@ COVERAGE_DEFINE(netdev_get_hwaddr);
 COVERAGE_DEFINE(netdev_set_hwaddr);
 COVERAGE_DEFINE(netdev_get_ethtool);
 COVERAGE_DEFINE(netdev_set_ethtool);
+COVERAGE_DEFINE(netdev_linux_invalid_l4_csum);
+COVERAGE_DEFINE(netdev_linux_unknown_l4_csum);
 
 
 #ifndef IFLA_IF_NETNSID
@@ -1029,6 +1030,8 @@ netdev_linux_construct_tap(struct netdev *netdev_)
         ovsthread_once_done(&once);
     }
 
+    memset(&ifr, 0, sizeof ifr);
+
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
     if (tap_supports_vnet_hdr) {
         ifr.ifr_flags |= IFF_VNET_HDR;
@@ -1062,8 +1065,7 @@ netdev_linux_construct_tap(struct netdev *netdev_)
 
     if (tap_supports_vnet_hdr
         && ioctl(netdev->tap_fd, TUNSETOFFLOAD, oflags) == 0) {
-        netdev_->ol_flags |= (NETDEV_TX_OFFLOAD_IPV4_CKSUM
-                              | NETDEV_TX_OFFLOAD_TCP_CKSUM
+        netdev_->ol_flags |= (NETDEV_TX_OFFLOAD_TCP_CKSUM
                               | NETDEV_TX_OFFLOAD_UDP_CKSUM);
 
         if (userspace_tso_enabled()) {
@@ -1584,8 +1586,11 @@ netdev_linux_rxq_drain(struct netdev_rxq *rxq_)
     struct netdev_rxq_linux *rx = netdev_rxq_linux_cast(rxq_);
     if (rx->is_tap) {
         struct ifreq ifr;
-        int error = af_inet_ifreq_ioctl(netdev_rxq_get_name(rxq_), &ifr,
-                                        SIOCGIFTXQLEN, "SIOCGIFTXQLEN");
+        int error;
+
+        memset(&ifr, 0, sizeof ifr);
+        error = af_inet_ifreq_ioctl(netdev_rxq_get_name(rxq_), &ifr,
+                                    SIOCGIFTXQLEN, "SIOCGIFTXQLEN");
         if (error) {
             return error;
         }
@@ -1941,6 +1946,7 @@ netdev_linux_get_mtu__(struct netdev_linux *netdev, int *mtup)
         /* Fall back to ioctl if netlink fails */
         struct ifreq ifr;
 
+        memset(&ifr, 0, sizeof ifr);
         netdev->netdev_mtu_error = af_inet_ifreq_ioctl(
             netdev_get_name(&netdev->up), &ifr, SIOCGIFMTU, "SIOCGIFMTU");
         netdev->mtu = ifr.ifr_mtu;
@@ -2003,7 +2009,10 @@ netdev_linux_set_mtu(struct netdev *netdev_, int mtu)
         }
         netdev->cache_valid &= ~VALID_MTU;
     }
+
+    memset(&ifr, 0, sizeof ifr);
     ifr.ifr_mtu = mtu;
+
     error = af_inet_ifreq_ioctl(netdev_get_name(netdev_), &ifr,
                                 SIOCSIFMTU, "SIOCSIFMTU");
     if (!error || error == ENODEV) {
@@ -2403,6 +2412,7 @@ static int
 netdev_linux_read_stringset_info(struct netdev_linux *netdev, uint32_t *len)
 {
     union {
+        struct ethtool_cmd ecmd;
         struct ethtool_sset_info hdr;
         struct {
             uint64_t pad[2];
@@ -2440,9 +2450,12 @@ netdev_linux_read_definitions(struct netdev_linux *netdev,
     int error = 0;
 
     error = netdev_linux_read_stringset_info(netdev, &len);
-    if (error || !len) {
+    if (error) {
         return error;
+    } else if (!len) {
+        return -EOPNOTSUPP;
     }
+
     strings = xzalloc(sizeof *strings + len * ETH_GSTRING_LEN);
 
     strings->cmd = ETHTOOL_GSTRINGS;
@@ -2507,13 +2520,11 @@ netdev_linux_set_ol(struct netdev *netdev_)
         char *string;
         uint32_t value;
     } t_list[] = {
-        {"tx-checksum-ipv4", NETDEV_TX_OFFLOAD_IPV4_CKSUM |
-                             NETDEV_TX_OFFLOAD_TCP_CKSUM |
+        {"tx-checksum-ipv4", NETDEV_TX_OFFLOAD_TCP_CKSUM |
                              NETDEV_TX_OFFLOAD_UDP_CKSUM},
         {"tx-checksum-ipv6", NETDEV_TX_OFFLOAD_TCP_CKSUM |
                              NETDEV_TX_OFFLOAD_UDP_CKSUM},
-        {"tx-checksum-ip-generic", NETDEV_TX_OFFLOAD_IPV4_CKSUM |
-                                   NETDEV_TX_OFFLOAD_TCP_CKSUM |
+        {"tx-checksum-ip-generic", NETDEV_TX_OFFLOAD_TCP_CKSUM |
                                    NETDEV_TX_OFFLOAD_UDP_CKSUM},
         {"tx-checksum-sctp", NETDEV_TX_OFFLOAD_SCTP_CKSUM},
         {"tx-tcp-segmentation", NETDEV_TX_OFFLOAD_TCP_TSO},
@@ -2725,6 +2736,7 @@ netdev_linux_get_speed_locked(struct netdev_linux *netdev,
                               uint32_t *current, uint32_t *max)
 {
     if (netdev_linux_netnsid_is_remote(netdev)) {
+        *current = *max = 0;
         return EOPNOTSUPP;
     }
 
@@ -2734,6 +2746,8 @@ netdev_linux_get_speed_locked(struct netdev_linux *netdev,
                    ? 0 : netdev->current_speed;
         *max = MIN(UINT32_MAX,
                    netdev_features_to_bps(netdev->supported, 0) / 1000000ULL);
+    } else {
+        *current = *max = 0;
     }
     return netdev->get_features_error;
 }
@@ -2916,8 +2930,8 @@ tc_add_matchall_policer(struct netdev *netdev, uint64_t kbits_rate,
     basic_offset = nl_msg_start_nested(&request, TCA_OPTIONS);
     action_offset = nl_msg_start_nested(&request, TCA_MATCHALL_ACT);
     nl_msg_put_act_police(&request, 0, kbits_rate, kbits_burst,
-                          kpkts_rate * 1000, kpkts_burst * 1000, TC_ACT_UNSPEC,
-                          false);
+                          kpkts_rate * 1000ULL, kpkts_burst * 1000ULL,
+                          TC_ACT_UNSPEC, false);
     nl_msg_end_nested(&request, action_offset);
     nl_msg_end_nested(&request, basic_offset);
 
@@ -3567,6 +3581,7 @@ do_set_addr(struct netdev *netdev,
 {
     struct ifreq ifr;
 
+    memset(&ifr, 0, sizeof ifr);
     make_in4_sockaddr(&ifr.ifr_addr, addr);
     return af_inet_ifreq_ioctl(netdev_get_name(netdev), &ifr, ioctl_nr,
                                ioctl_name);
@@ -6428,18 +6443,10 @@ getqdisc_is_safe(void)
     static bool safe = false;
 
     if (ovsthread_once_start(&once)) {
-        struct utsname utsname;
-        int major, minor;
-
-        if (uname(&utsname) == -1) {
-            VLOG_WARN("uname failed (%s)", ovs_strerror(errno));
-        } else if (!ovs_scan(utsname.release, "%d.%d", &major, &minor)) {
-            VLOG_WARN("uname reported bad OS release (%s)", utsname.release);
-        } else if (major < 2 || (major == 2 && minor < 35)) {
-            VLOG_INFO("disabling unsafe RTM_GETQDISC in Linux kernel %s",
-                      utsname.release);
-        } else {
+        if (ovs_kernel_is_version_or_newer(2, 35)) {
             safe = true;
+        } else {
+            VLOG_INFO("disabling unsafe RTM_GETQDISC in Linux kernel");
         }
         ovsthread_once_done(&once);
     }
@@ -6740,7 +6747,8 @@ get_stats_via_netlink(const struct netdev *netdev_, struct netdev_stats *stats)
             struct rtnl_link_stats64 aligned_lstats;
 
             if (!IS_PTR_ALIGNED(lstats)) {
-                memcpy(&aligned_lstats, lstats, sizeof aligned_lstats);
+                memcpy(&aligned_lstats, (void *) lstats,
+                       sizeof aligned_lstats);
                 lstats = &aligned_lstats;
             }
             netdev_stats_from_rtnl_link_stats64(stats, lstats);
@@ -6771,6 +6779,7 @@ get_flags(const struct netdev *dev, unsigned int *flags)
     struct ifreq ifr;
     int error;
 
+    memset(&ifr, 0, sizeof ifr);
     *flags = 0;
     error = af_inet_ifreq_ioctl(dev->name, &ifr, SIOCGIFFLAGS, "SIOCGIFFLAGS");
     if (!error) {
@@ -6784,6 +6793,7 @@ set_flags(const char *name, unsigned int flags)
 {
     struct ifreq ifr;
 
+    memset(&ifr, 0, sizeof ifr);
     ifr.ifr_flags = flags;
     return af_inet_ifreq_ioctl(name, &ifr, SIOCSIFFLAGS, "SIOCSIFFLAGS");
 }
@@ -6794,6 +6804,7 @@ linux_get_ifindex(const char *netdev_name)
     struct ifreq ifr;
     int error;
 
+    memset(&ifr, 0, sizeof ifr);
     ovs_strzcpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
     COVERAGE_INC(netdev_get_ifindex);
 
@@ -7029,55 +7040,6 @@ af_packet_sock(void)
     return sock;
 }
 
-static int
-netdev_linux_parse_l2(struct dp_packet *b, uint16_t *l4proto)
-{
-    struct eth_header *eth_hdr;
-    ovs_be16 eth_type;
-    int l2_len;
-
-    eth_hdr = dp_packet_at(b, 0, ETH_HEADER_LEN);
-    if (!eth_hdr) {
-        return -EINVAL;
-    }
-
-    l2_len = ETH_HEADER_LEN;
-    eth_type = eth_hdr->eth_type;
-    if (eth_type_vlan(eth_type)) {
-        struct vlan_header *vlan = dp_packet_at(b, l2_len, VLAN_HEADER_LEN);
-
-        if (!vlan) {
-            return -EINVAL;
-        }
-
-        eth_type = vlan->vlan_next_type;
-        l2_len += VLAN_HEADER_LEN;
-    }
-
-    if (eth_type == htons(ETH_TYPE_IP)) {
-        struct ip_header *ip_hdr = dp_packet_at(b, l2_len, IP_HEADER_LEN);
-
-        if (!ip_hdr) {
-            return -EINVAL;
-        }
-
-        *l4proto = ip_hdr->ip_proto;
-        dp_packet_hwol_set_tx_ipv4(b);
-    } else if (eth_type == htons(ETH_TYPE_IPV6)) {
-        struct ovs_16aligned_ip6_hdr *nh6;
-
-        nh6 = dp_packet_at(b, l2_len, IPV6_HEADER_LEN);
-        if (!nh6) {
-            return -EINVAL;
-        }
-
-        *l4proto = nh6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
-        dp_packet_hwol_set_tx_ipv6(b);
-    }
-
-    return 0;
-}
-
 /* Initializes packet 'b' with features enabled in the prepended
  * struct virtio_net_hdr.  Returns 0 if successful, otherwise a
  * positive errno value. */
@@ -7095,25 +7057,46 @@ netdev_linux_parse_vnet_hdr(struct dp_packet *b)
     }
 
     if (vnet->flags == VIRTIO_NET_HDR_F_NEEDS_CSUM) {
-        uint16_t l4proto = 0;
+        uint16_t csum_offset = (OVS_FORCE uint16_t) vnet->csum_offset;
+        uint16_t csum_start = (OVS_FORCE uint16_t) vnet->csum_start;
 
-        if (netdev_linux_parse_l2(b, &l4proto)) {
+        if (csum_start >= dp_packet_size(b)
+            || csum_start + csum_offset >= dp_packet_size(b)) {
+            COVERAGE_INC(netdev_linux_invalid_l4_csum);
             return EINVAL;
         }
 
-        if (l4proto == IPPROTO_UDP) {
-            dp_packet_hwol_set_csum_udp(b);
+        parse_tcp_flags(b, NULL, NULL, NULL);
+
+        if (csum_start == b->l4_ofs
+            && ((csum_offset == offsetof(struct tcp_header, tcp_csum)
+                 && dp_packet_l4_proto_tcp(b))
+                || (csum_offset == offsetof(struct udp_header, udp_csum)
+                    && dp_packet_l4_proto_udp(b))
+                || (csum_offset == offsetof(struct sctp_header, sctp_csum)
+                    && dp_packet_l4_proto_sctp(b)))) {
+            dp_packet_l4_checksum_set_partial(b);
+        } else {
+            ovs_be16 *csum_l4;
+            void *l4;
+
+            COVERAGE_INC(netdev_linux_unknown_l4_csum);
+
+            csum_l4 = dp_packet_at(b, csum_start + csum_offset,
+                                   sizeof *csum_l4);
+            if (!csum_l4) {
+                return EINVAL;
+            }
+
+            l4 = dp_packet_at(b, csum_start, dp_packet_size(b) - csum_start);
+            *csum_l4 = csum(l4, dp_packet_size(b) - csum_start);
+
+            if (dp_packet_l4_proto_tcp(b)
+                || dp_packet_l4_proto_udp(b)
+                || dp_packet_l4_proto_sctp(b)) {
+                dp_packet_l4_checksum_set_good(b);
+            }
         }
-        /* The packet has offloaded checksum. However, there is no
-         * additional information like the protocol used, so it would
-         * require to parse the packet here. The checksum starting point
-         * and offset are going to be verified when the packet headers
-         * are parsed during miniflow extraction. */
-        b->csum_start = (OVS_FORCE uint16_t) vnet->csum_start;
-        b->csum_offset = (OVS_FORCE uint16_t) vnet->csum_offset;
-    } else {
-        b->csum_start = 0;
-        b->csum_offset = 0;
     }
 
     int ret = 0;
@@ -7121,7 +7104,6 @@ netdev_linux_parse_vnet_hdr(struct dp_packet *b)
     case VIRTIO_NET_HDR_GSO_TCPV4:
     case VIRTIO_NET_HDR_GSO_TCPV6:
         dp_packet_set_tso_segsz(b, (OVS_FORCE uint16_t) vnet->gso_size);
-        dp_packet_hwol_set_tcp_seg(b);
         break;
 
     case VIRTIO_NET_HDR_GSO_UDP:
@@ -7151,12 +7133,16 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
     struct virtio_net_hdr v;
     struct virtio_net_hdr *vnet = &v;
 
-    if (dp_packet_hwol_is_tso(b)) {
+    if (dp_packet_get_tso_segsz(b)) {
         uint16_t tso_segsz = dp_packet_get_tso_segsz(b);
-        struct tcp_header *tcp = dp_packet_l4(b);
-        struct tcp_header *inner_tcp = dp_packet_inner_l4(b);
-        if (inner_tcp) {
-            tcp = inner_tcp;
+        const struct tcp_header *tcp;
+        const struct ip_header *ip;
+        if (dp_packet_inner_l4(b)) {
+            tcp = dp_packet_inner_l4(b);
+            ip = dp_packet_inner_l3(b);
+        } else {
+            tcp = dp_packet_l4(b);
+            ip = dp_packet_l3(b);
         }
         int tcp_hdr_len = TCP_OFFSET(tcp->tcp_ctl) * 4;
         int hdr_len = ((char *) tcp - (char *) dp_packet_eth(b))
@@ -7172,10 +7158,14 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
 
         vnet->hdr_len = (OVS_FORCE __virtio16)hdr_len;
         vnet->gso_size = (OVS_FORCE __virtio16)(tso_segsz);
-        if (dp_packet_hwol_is_ipv4(b)) {
+        if (IP_VER(ip->ip_ihl_ver) == 4) {
             vnet->gso_type = VIRTIO_NET_HDR_GSO_TCPV4;
-        } else if (dp_packet_hwol_tx_ipv6(b)) {
+        } else if (IP_VER(ip->ip_ihl_ver) == 6) {
             vnet->gso_type = VIRTIO_NET_HDR_GSO_TCPV6;
+        } else {
+            VLOG_ERR_RL(&rl, "Unknown gso_type for TSO packet. "
+                        "Offloads: %"PRIu32, b->offloads);
+            return EINVAL;
         }
     } else {
         vnet->hdr_len = 0;
@@ -7183,33 +7173,38 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
         vnet->gso_type = VIRTIO_NET_HDR_GSO_NONE;
     }
 
-    bool l4_is_good = dp_packet_l4_checksum_good(b);
-
-    if ((dp_packet_hwol_is_tunnel_vxlan(b) ||
-         dp_packet_hwol_is_tunnel_geneve(b)) &&
-        dp_packet_hwol_tx_l4_checksum(b)) {
-        /* This condition is needed because dp-packet doesn't currently track
-         * outer and inner checksum statuses seperately. In the case of these
-         * two tunnel types we can end up setting outer l4 as good but still
-         * need to complete the inner l4. */
-        l4_is_good = !(dp_packet_hwol_l4_is_tcp(b) ||
-                       dp_packet_hwol_l4_is_udp(b));
-    }
-
-    if (l4_is_good) {
+    if (dp_packet_l4_checksum_good(b)
+        && (!dp_packet_tunnel(b)
+            || dp_packet_inner_l4_checksum_good(b))) {
         /* The packet has good L4 checksum. No need to validate again. */
         vnet->csum_start = vnet->csum_offset = (OVS_FORCE __virtio16) 0;
         vnet->flags = VIRTIO_NET_HDR_F_DATA_VALID;
+    } else if (dp_packet_l4_checksum_partial(b)
+               || dp_packet_inner_l4_checksum_partial(b)) {
+        const struct ip_header *ip_hdr;
+        void *l3_off;
+        void *l4_off;
+        bool is_sctp;
+        bool is_tcp;
+        bool is_udp;
 
-        /* It is possible that L4 is good but the IPv4 checksum isn't
-         * complete. For example in the case of UDP encapsulation of an ARP
-         * packet where the UDP checksum is 0. */
-        if (dp_packet_hwol_l3_csum_ipv4_ol(b)) {
-            dp_packet_ip_set_header_csum(b, false);
+        if (dp_packet_inner_l4_checksum_partial(b)) {
+            l3_off = dp_packet_inner_l3(b);
+            l4_off = dp_packet_inner_l4(b);
+            is_tcp = dp_packet_inner_l4_proto_tcp(b);
+            is_udp = dp_packet_inner_l4_proto_udp(b);
+            is_sctp = dp_packet_inner_l4_proto_sctp(b);
+        } else {
+            l3_off = dp_packet_l3(b);
+            l4_off = dp_packet_l4(b);
+            is_tcp = dp_packet_l4_proto_tcp(b);
+            is_udp = dp_packet_l4_proto_udp(b);
+            is_sctp = dp_packet_l4_proto_sctp(b);
         }
-    } else if (dp_packet_hwol_tx_l4_checksum(b)) {
+        ip_hdr = l3_off;
+
         /* The csum calculation is offloaded. */
-        if (dp_packet_hwol_l4_is_tcp(b)) {
+        if (is_tcp) {
             /* Virtual I/O Device (VIRTIO) Version 1.1
              * 5.1.6.2 Packet Transmission
              * If the driver negotiated VIRTIO_NET_F_CSUM, it can skip
@@ -7224,20 +7219,12 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
              * the TCP pseudo header, so that replacing it by the ones
              * complement checksum of the TCP header and body will give
              * the correct result. */
-            void *l3_off = dp_packet_inner_l3(b);
-            void *l4_off = dp_packet_inner_l4(b);
-
-            if (!l3_off || !l4_off) {
-                l3_off = dp_packet_l3(b);
-                l4_off = dp_packet_l4(b);
-            }
-
             struct tcp_header *tcp_hdr = l4_off;
             ovs_be16 csum = 0;
-            if (dp_packet_hwol_is_ipv4(b)) {
-                const struct ip_header *ip_hdr = l3_off;
+
+            if (IP_VER(ip_hdr->ip_ihl_ver) == 4) {
                 csum = ~csum_finish(packet_csum_pseudoheader(ip_hdr));
-            } else if (dp_packet_hwol_tx_ipv6(b)) {
+            } else if (IP_VER(ip_hdr->ip_ihl_ver) == 6) {
                 const struct ovs_16aligned_ip6_hdr *ip6_hdr = l3_off;
                 csum = ~csum_finish(packet_csum_pseudoheader6(ip6_hdr));
             }
@@ -7248,24 +7235,14 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
                                     (char *) dp_packet_data(b));
             vnet->csum_offset = (OVS_FORCE __virtio16) __builtin_offsetof(
                                     struct tcp_header, tcp_csum);
-        } else if (dp_packet_hwol_l4_is_udp(b)) {
-            /* Favour the inner packet when indicating checksum offsets. */
-            void *l3_off = dp_packet_inner_l3(b);
-            void *l4_off = dp_packet_inner_l4(b);
-
-            if (!l3_off || !l4_off) {
-                l3_off = dp_packet_l3(b);
-                l4_off = dp_packet_l4(b);
-            }
+        } else if (is_udp) {
             struct udp_header *udp_hdr = l4_off;
-
             ovs_be16 csum = 0;
 
-            if (dp_packet_hwol_is_ipv4(b)) {
-                const struct ip_header *ip_hdr = l3_off;
+            if (IP_VER(ip_hdr->ip_ihl_ver) == 4) {
                 csum = ~csum_finish(packet_csum_pseudoheader(ip_hdr));
-            } else if (dp_packet_hwol_tx_ipv6(b)) {
-                const struct ovs_16aligned_ip6_hdr *ip6_hdr = l4_off;
+            } else if (IP_VER(ip_hdr->ip_ihl_ver) == 6) {
+                const struct ovs_16aligned_ip6_hdr *ip6_hdr = l3_off;
                 csum = ~csum_finish(packet_csum_pseudoheader6(ip6_hdr));
             }
 
@@ -7275,7 +7252,7 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
                                     (char *) dp_packet_data(b));;
             vnet->csum_offset = (OVS_FORCE __virtio16) __builtin_offsetof(
                                     struct udp_header, udp_csum);
-        } else if (dp_packet_hwol_l4_is_sctp(b)) {
+        } else if (is_sctp) {
             /* The Linux kernel networking stack only supports csum_start
              * and csum_offset when SCTP GSO is enabled.  See kernel's
              * skb_csum_hwoffload_help(). Currently there is no SCTP
@@ -7283,11 +7260,10 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
             vnet->csum_start = vnet->csum_offset = (OVS_FORCE __virtio16) 0;
             vnet->flags = 0;
         } else {
-            /* This should only happen when DP_PACKET_OL_TX_L4_MASK includes
-             * a new flag that is not covered in above checks. */
+            /* This should only happen when a new L4 proto
+             * is not covered in above checks. */
             VLOG_WARN_RL(&rl, "Unsupported L4 checksum offload. "
-                         "Flags: %"PRIu64,
-                         (uint64_t)*dp_packet_ol_flags_ptr(b));
+                         "Offloads: %"PRIu32, b->offloads);
             vnet->csum_start = vnet->csum_offset = (OVS_FORCE __virtio16) 0;
             vnet->flags = 0;
         }

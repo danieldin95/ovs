@@ -56,6 +56,15 @@
 
 VLOG_DEFINE_THIS_MODULE(vsctl);
 
+/* Post OVSDB reload error reported. */
+#ifdef _WIN32
+#include <WinError.h>
+#define EXIT_POSTDB_ERROR ERROR_BAD_ARGUMENTS
+#else
+#include <sysexits.h>
+#define EXIT_POSTDB_ERROR EX_DATAERR
+#endif
+
 struct vsctl_context;
 
 /* --db: The database server to contact. */
@@ -115,7 +124,7 @@ static void parse_options(int argc, char *argv[], struct shash *local_options);
 static void run_prerequisites(struct ctl_command[], size_t n_commands,
                               struct ovsdb_idl *);
 static bool do_vsctl(const char *args, struct ctl_command *, size_t n,
-                     struct ovsdb_idl *);
+                     struct ovsdb_idl *, bool *postdb_err);
 
 /* post_db_reload_check frame work is to allow ovs-vsctl to do additional
  * checks after OVSDB transactions are successfully recorded and reload by
@@ -134,11 +143,13 @@ static bool do_vsctl(const char *args, struct ctl_command *, size_t n,
  * Current implementation only check for Post OVSDB reload failures on new
  * interface additions with 'add-br' and 'add-port' commands.
  *
+ * post_db_reload_do_checks() returns 'true' if a failure is reported.
+ *
  * post_db_reload_expect_iface()
  *
  * keep track of interfaces to be checked post OVSDB reload. */
 static void post_db_reload_check_init(void);
-static void post_db_reload_do_checks(const struct vsctl_context *);
+static bool post_db_reload_do_checks(const struct vsctl_context *);
 static void post_db_reload_expect_iface(const struct ovsrec_interface *);
 
 static struct uuid *neoteric_ifaces;
@@ -200,9 +211,15 @@ main(int argc, char *argv[])
         }
 
         if (seqno != ovsdb_idl_get_seqno(idl)) {
+            bool postdb_err;
+
             seqno = ovsdb_idl_get_seqno(idl);
-            if (do_vsctl(args, commands, n_commands, idl)) {
+            if (do_vsctl(args, commands, n_commands, idl, &postdb_err)) {
                 free(args);
+                if (postdb_err) {
+                    exit(EXIT_POSTDB_ERROR);
+                }
+
                 exit(EXIT_SUCCESS);
             }
         }
@@ -278,7 +295,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
     ctl_add_cmd_options(&options, &n_options, &allocated_options, OPT_LOCAL);
 
     for (;;) {
-        int idx;
+        int idx = INT_MAX;
         int c;
 
         c = getopt_long(argc, argv, short_options, options, &idx);
@@ -429,10 +446,10 @@ Manager commands:\n\
   [--inactivity-probe=MSECS]\n\
   set-manager TARGET...      set the list of managers to TARGET...\n\
 \n\
-SSL commands:\n\
-  get-ssl                     print the SSL configuration\n\
-  del-ssl                     delete the SSL configuration\n\
-  set-ssl PRIV-KEY CERT CA-CERT  set the SSL configuration\n\
+SSL/TLS commands:\n\
+  get-ssl                     print the SSL/TLS configuration\n\
+  del-ssl                     delete the SSL/TLS configuration\n\
+  set-ssl PRIV-KEY CERT CA-CERT  set the SSL/TLS configuration\n\
 \n\
 Auto Attach commands:\n\
   add-aa-mapping BRIDGE I-SID VLAN   add Auto Attach mapping to BRIDGE\n\
@@ -1294,8 +1311,11 @@ cmd_add_zone_tp(struct ctl_context *ctx)
     int64_t zone_id;
 
     const char *dp_name = ctx->argv[1];
-    ovs_scan(ctx->argv[2], "zone=%"SCNi64, &zone_id);
     bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+
+    if (!ovs_scan(ctx->argv[2], "zone=%"SCNi64, &zone_id)) {
+        ctl_fatal("invalid zone argument, %s", ctx->argv[2]);
+    }
 
     struct ovsrec_datapath *dp = find_datapath(vsctl_ctx, dp_name);
     if (!dp) {
@@ -1331,7 +1351,10 @@ cmd_del_zone_tp(struct ctl_context *ctx)
 
     bool must_exist = !shash_find(&ctx->options, "--if-exists");
     const char *dp_name = ctx->argv[1];
-    ovs_scan(ctx->argv[2], "zone=%"SCNi64, &zone_id);
+
+    if (!ovs_scan(ctx->argv[2], "zone=%"SCNi64, &zone_id)) {
+        ctl_fatal("invalid zone argument, %s", ctx->argv[2]);
+    }
 
     struct ovsrec_datapath *dp = find_datapath(vsctl_ctx, dp_name);
     if (!dp) {
@@ -1396,8 +1419,14 @@ cmd_set_zone_limit(struct ctl_context *ctx)
 
     const char *dp_name = ctx->argv[1];
 
-    ovs_scan(ctx->argv[2], "%"SCNi64, &zone_id);
-    ovs_scan(ctx->argv[3], "%"SCNi64, &limit);
+    if (!ovs_scan(ctx->argv[2], "%"SCNi64, &zone_id)
+        && strcmp(ctx->argv[2], "default")) {
+        ctl_fatal("invalid zone id, %s", ctx->argv[2]);
+    }
+
+    if (!ovs_scan(ctx->argv[3], "%"SCNi64, &limit)) {
+        ctl_fatal("invalid limit, %s", ctx->argv[3]);
+    }
 
     struct ovsrec_datapath *dp = find_datapath(vsctl_ctx, dp_name);
     if (!dp) {
@@ -1435,7 +1464,10 @@ cmd_del_zone_limit(struct ctl_context *ctx)
     bool must_exist = !shash_find(&ctx->options, "--if-exists");
     const char *dp_name = ctx->argv[1];
 
-    ovs_scan(ctx->argv[2], "%"SCNi64, &zone_id);
+    if (!ovs_scan(ctx->argv[2], "%"SCNi64, &zone_id)
+        && strcmp(ctx->argv[2], "default")) {
+        ctl_fatal("invalid zone id, %s", ctx->argv[2]);
+    }
 
     struct ovsrec_datapath *dp = find_datapath(vsctl_ctx, dp_name);
     if (!dp) {
@@ -2809,10 +2841,10 @@ post_db_reload_expect_iface(const struct ovsrec_interface *iface)
     neoteric_ifaces[n_neoteric_ifaces++] = iface->header_.uuid;
 }
 
-static void
+static bool
 post_db_reload_do_checks(const struct vsctl_context *vsctl_ctx)
 {
-    bool print_error = false;
+    bool reconfig_failed = false;
     size_t i;
 
     for (i = 0; i < n_neoteric_ifaces; i++) {
@@ -2834,14 +2866,16 @@ post_db_reload_do_checks(const struct vsctl_context *vsctl_ctx)
                                  "See ovs-vswitchd log for details.",
                               iface->name);
                 }
-                print_error = true;
+                reconfig_failed = true;
             }
         }
     }
 
-    if (print_error) {
+    if (reconfig_failed) {
         ovs_error(0, "The default log directory is \"%s\".", ovs_logdir());
     }
+
+    return reconfig_failed;
 }
 
 
@@ -2950,7 +2984,7 @@ vsctl_parent_process_info(void)
 
 static bool
 do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
-         struct ovsdb_idl *idl)
+         struct ovsdb_idl *idl, bool *postdb_err)
 {
     struct ovsdb_idl_txn *txn;
     const struct ovsrec_open_vswitch *ovs;
@@ -2962,6 +2996,8 @@ do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
     int64_t next_cfg = 0;
     char *ppid_info = NULL;
 
+    ovs_assert(postdb_err);
+    *postdb_err = false;
     txn = the_idl_txn = ovsdb_idl_txn_create(idl);
     if (dry_run) {
         ovsdb_idl_txn_set_dry_run(txn);
@@ -3124,7 +3160,9 @@ do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
             ovsdb_idl_run(idl);
             OVSREC_OPEN_VSWITCH_FOR_EACH (ovs, idl) {
                 if (ovs->cur_cfg >= next_cfg) {
-                    post_db_reload_do_checks(&vsctl_ctx);
+                    if (post_db_reload_do_checks(&vsctl_ctx)) {
+                        *postdb_err = true;
+                    }
                     goto done;
                 }
             }
@@ -3254,7 +3292,7 @@ static const struct ctl_command_syntax vsctl_commands[] = {
     {"set-manager", 1, INT_MAX, "TARGET...", pre_manager, cmd_set_manager,
      NULL, "--inactivity-probe=", RW},
 
-    /* SSL commands. */
+    /* SSL/TLS commands. */
     {"get-ssl", 0, 0, "", pre_cmd_get_ssl, cmd_get_ssl, NULL, "", RO},
     {"del-ssl", 0, 0, "", pre_cmd_del_ssl, cmd_del_ssl, NULL, "", RW},
     {"set-ssl", 3, 3, "PRIVATE-KEY CERTIFICATE CA-CERT", pre_cmd_set_ssl,

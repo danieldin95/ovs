@@ -39,6 +39,7 @@
 #
 import argparse
 import datetime
+import errno
 import os
 import pytz
 import psutil
@@ -181,17 +182,56 @@ struct syscall_data_key_t {
     u32 syscall;
 };
 
+struct long_poll_data_key_t {
+    u32 pid;
+    u32 tid;
+};
+
+struct long_poll_data_t {
+    u64 count;
+    u64 total_ns;
+    u64 min_ns;
+    u64 max_ns;
+};
+
 BPF_HASH(syscall_start, u64, u64);
 BPF_HASH(syscall_data, struct syscall_data_key_t, struct syscall_data_t);
+BPF_HASH(long_poll_start, u64, u64);
+BPF_HASH(long_poll_data, struct long_poll_data_key_t, struct long_poll_data_t);
 
 TRACEPOINT_PROBE(raw_syscalls, sys_enter) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
+    struct long_poll_data_t *val, init_val = {.min_ns = U64_MAX};
+    struct long_poll_data_key_t key;
 
     if (!capture_enabled(pid_tgid))
        return 0;
 
     u64 t = bpf_ktime_get_ns();
     syscall_start.update(&pid_tgid, &t);
+
+    /* Do long poll handling from here on. */
+    if (args->id != <SYSCALL_POLL_ID>)
+        return 0;
+
+    u64 *start_ns = long_poll_start.lookup(&pid_tgid);
+
+    if (!start_ns || *start_ns == 0)
+        return 0;
+
+    key.pid = pid_tgid >> 32;
+    key.tid = (u32)pid_tgid;
+
+    val = long_poll_data.lookup_or_try_init(&key, &init_val);
+    if (val) {
+        u64 delta = t - *start_ns;
+        val->count++;
+        val->total_ns += delta;
+        if (delta > val->max_ns)
+            val->max_ns = delta;
+        if (delta < val->min_ns)
+            val->min_ns = delta;
+    }
 
     return 0;
 }
@@ -205,6 +245,12 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit) {
     if (!capture_enabled(pid_tgid))
        return 0;
 
+    u64 t = bpf_ktime_get_ns();
+
+    if (args->id == <SYSCALL_POLL_ID>) {
+        long_poll_start.update(&pid_tgid, &t);
+    }
+
     key.pid = pid_tgid >> 32;
     key.tid = (u32)pid_tgid;
     key.syscall = args->id;
@@ -216,7 +262,7 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit) {
 
     val = syscall_data.lookup_or_try_init(&key, &zero);
     if (val) {
-        u64 delta = bpf_ktime_get_ns() - *start_ns;
+        u64 delta = t - *start_ns;
         val->count++;
         val->total_ns += delta;
         if (delta > val->worst_ns)
@@ -556,6 +602,36 @@ TRACEPOINT_PROBE(irq, softirq_exit)
     data->start_ns = 0;
     return 0;
 }
+
+
+/*
+ * For measuring upcall statistics (per CPU).
+ */
+BPF_PERCPU_HASH(upcall_count);
+
+#if <INSTALL_OVS_DP_UPCALL_PROBE>
+int kretprobe__ovs_dp_upcall(struct pt_regs *ctx)
+{
+    int ret = PT_REGS_RC(ctx);
+    u64 zero = 0;
+    u64 *entry;
+    u64 key;
+
+    if (!capture_enabled__())
+        return 0;
+
+    if (ret >= 0)
+        key = 0;
+    else
+        key = -ret;
+
+    entry = upcall_count.lookup_or_try_init(&key, &zero);
+    if (entry)
+        *entry += 1;
+
+    return 0;
+}
+#endif /* For measuring upcall statistics/errors. */
 """
 
 
@@ -887,6 +963,7 @@ def reset_capture():
     bpf["stack_traces"].clear()
     bpf["stop_start"].clear()
     bpf["stop_data"].clear()
+    bpf["upcall_count"].clear()
 
 
 #
@@ -898,6 +975,97 @@ def print_timestamp(msg):
     time_string = "{} @{} ({} UTC)".format(
         msg, ltz.isoformat(), utc.strftime("%H:%M:%S"))
     print(time_string)
+
+
+#
+# Get errno short string
+#
+def get_errno_short(err):
+    try:
+        return errno.errorcode[err]
+    except KeyError:
+        return "_unknown_"
+
+
+#
+# Format a eBPF per-cpu hash entry (if the count is > 0)
+#
+def format_per_cpu_hash(cpu_hash, key=None, skip_key=None):
+    per_cpu = ""
+
+    if key is not None:
+        total = cpu_hash.sum(key).value
+        if total > 0:
+            for cpu, value in enumerate(cpu_hash.getvalue(key)):
+                if value == 0:
+                    continue
+
+                per_cpu += " {}: {},".format(cpu, value)
+    else:
+        total = 0
+        total_cpu = None
+
+        for key in cpu_hash.keys():
+            if skip_key is not None and skip_key.value == key.value:
+                continue
+
+            if total_cpu is None:
+                total_cpu = [0] * len(cpu_hash.getvalue(key))
+
+            for cpu, value in enumerate(cpu_hash.getvalue(key)):
+                total_cpu[cpu] += value
+                total += value
+
+        if total >= 0 and total_cpu:
+            for cpu, value in enumerate(total_cpu):
+                if value == 0:
+                    continue
+
+                per_cpu += " {}: {},".format(cpu, value)
+
+    return total, per_cpu.strip(", ")
+
+
+#
+# Display kernel upcall statistics
+#
+def display_upcall_results():
+    upcalls = bpf["upcall_count"]
+    have_upcalls = False
+
+    for k in upcalls:
+        if upcalls.sum(k).value == 0:
+            continue
+        have_upcalls = True
+        break
+
+    if not have_upcalls:
+        return
+
+    print("\n\n# UPCALL STATISTICS (TOTAL [CPU_ID: N_UPCALLS_PER_CPU, ...]):\n"
+        "  Total upcalls       : {} [{}]".format(
+            *format_per_cpu_hash(upcalls)))
+
+    for k in sorted(upcalls, key=lambda x: int(x.value)):
+        error = k.value
+        total, per_cpu = format_per_cpu_hash(upcalls, key=k)
+
+        if error != 0 and total == 0:
+            continue
+
+        if error == 0:
+            total_failed, per_cpu_failed = format_per_cpu_hash(upcalls,
+                                                               skip_key=k)
+            if total_failed == 0:
+                continue
+
+            print("  Successfull upcalls : {} [{}]".format(total, per_cpu))
+            print("  Failed upcalls      : {} [{}]".format(total_failed,
+                                                           per_cpu_failed))
+        else:
+            print("    {:3}, {:13}: {} [{}]".format(error,
+                                                    get_errno_short(error),
+                                                    total, per_cpu))
 
 
 #
@@ -916,6 +1084,9 @@ def process_results(syscall_events=None, trigger_delta=None):
     threads_syscall = {k.tid for k, _ in bpf["syscall_data"].items()
                        if k.syscall != 0xffffffff}
 
+    threads_long_poll = {k.tid for k, _ in bpf["long_poll_data"].items()
+                         if k.pid != 0xffffffff}
+
     threads_run = {k.tid for k, _ in bpf["run_data"].items()
                    if k.pid != 0xffffffff}
 
@@ -932,7 +1103,8 @@ def process_results(syscall_events=None, trigger_delta=None):
                        if k.pid != 0xffffffff}
 
     threads = sorted(threads_syscall | threads_run | threads_ready |
-                     threads_stopped | threads_hardirq | threads_softirq,
+                     threads_stopped | threads_hardirq | threads_softirq |
+                     threads_long_poll,
                      key=lambda x: get_thread_name(options.pid, x))
 
     #
@@ -975,6 +1147,21 @@ def process_results(syscall_events=None, trigger_delta=None):
         if total_count > 0:
             print("{}{:20.20} {:6}  {:10}  {:16,}".format(
                 indent, "TOTAL( - poll):", "", total_count, total_ns))
+
+        #
+        # LONG POLL STATISTICS
+        #
+        for k, v in filter(lambda t: t[0].tid == thread,
+                           bpf["long_poll_data"].items()):
+
+            print("\n{:10} {:16} {}\n{}{:10}  {:>16}  {:>16}  {:>16}".format(
+                "", "", "[LONG POLL STATISTICS]", indent,
+                "COUNT", "AVERAGE ns", "MIN ns", "MAX ns"))
+
+            print("{}{:10}  {:16,}  {:16,}  {:16,}".format(
+                indent, v.count, int(v.total_ns / max(v.count, 1)),
+                v.min_ns, v.max_ns))
+            break
 
         #
         # THREAD RUN STATISTICS
@@ -1074,7 +1261,12 @@ def process_results(syscall_events=None, trigger_delta=None):
                 indent, "TOTAL:", "", total_count, total_ns))
 
     #
-    # Print events
+    # Print upcall statistics
+    #
+    display_upcall_results()
+
+    #
+    # Print syscall events
     #
     lost_stack_traces = 0
     if syscall_events:
@@ -1194,6 +1386,9 @@ def main():
     parser.add_argument("--skip-syscall-poll-events",
                         help="Skip poll() syscalls with --syscall-events",
                         action="store_true")
+    parser.add_argument("--skip-upcall-stats",
+                        help="Skip the collection of upcall statistics",
+                        action="store_true")
     parser.add_argument("--stack-trace-size",
                         help="Number of unique stack traces that can be "
                         "recorded, default 4096. 0 to disable",
@@ -1297,6 +1492,11 @@ def main():
 
     source = source.replace("<STACK_TRACE_ENABLED>", "true"
                             if options.stack_trace_size > 0 else "false")
+
+    source = source.replace("<SYSCALL_POLL_ID>", str(poll_id))
+
+    source = source.replace("<INSTALL_OVS_DP_UPCALL_PROBE>", "0"
+                            if options.skip_upcall_stats else "1")
 
     #
     # Handle start/stop probes

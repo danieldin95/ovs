@@ -179,21 +179,38 @@ struct json *
 json_string_create_nocopy(char *s)
 {
     struct json *json = json_create(JSON_STRING);
-    json->string = s;
+    json->storage_type = JSON_STRING_DYNAMIC;
+    json->str_ptr = s;
     return json;
 }
 
 struct json *
 json_string_create(const char *s)
 {
-    return json_string_create_nocopy(xstrdup(s));
+    struct json *json = json_create(JSON_STRING);
+    size_t length = strlen(s);
+
+    if (length <= JSON_STRING_INLINE_LEN) {
+        json->storage_type = JSON_STRING_INLINE;
+        memcpy(json->str, s, length);
+        json->str[length] = '\0';
+    } else {
+        json->storage_type = JSON_STRING_DYNAMIC;
+        json->str_ptr = xmemdup0(s, length);
+    }
+    return json;
+}
+
+struct json *json_string_create_uuid(const struct uuid *uuid)
+{
+    return json_string_create_nocopy(uuid_to_string(uuid));
 }
 
 struct json *
 json_serialized_object_create(const struct json *src)
 {
     struct json *json = json_create(JSON_SERIALIZED_OBJECT);
-    json->string = json_to_string(src, JSSF_SORT);
+    json->str_ptr = json_to_string(src, JSSF_SORT);
     return json;
 }
 
@@ -201,7 +218,7 @@ struct json *
 json_serialized_object_create_with_yield(const struct json *src)
 {
     struct json *json = json_create(JSON_SERIALIZED_OBJECT);
-    json->string = json_to_string(src, JSSF_SORT | JSSF_YIELD);
+    json->str_ptr = json_to_string(src, JSSF_SORT | JSSF_YIELD);
     return json;
 }
 
@@ -209,30 +226,103 @@ struct json *
 json_array_create_empty(void)
 {
     struct json *json = json_create(JSON_ARRAY);
-    json->array.elems = NULL;
-    json->array.n = 0;
-    json->array.n_allocated = 0;
+    json->storage_type = JSON_ARRAY_DYNAMIC;
+    json->array.elements = NULL;
+    json->array.size = 0;
+    json->array.allocated = 0;
     return json;
 }
 
 void
 json_array_add(struct json *array_, struct json *element)
 {
-    struct json_array *array = json_array(array_);
-    if (array->n >= array->n_allocated) {
-        array->elems = x2nrealloc(array->elems, &array->n_allocated,
-                                  sizeof *array->elems);
+    switch (array_->storage_type) {
+    case JSON_ARRAY_DYNAMIC:
+        if (!array_->array.size) {
+            array_->storage_type = JSON_ARRAY_INLINE_1;
+            array_->elements[0] = element;
+            return;
+        }
+        break;
+
+    case JSON_ARRAY_INLINE_1:
+    case JSON_ARRAY_INLINE_2:
+        array_->elements[array_->storage_type - JSON_ARRAY_DYNAMIC] = element;
+        array_->storage_type++;
+        return;
+
+    case JSON_ARRAY_INLINE_3: {
+        struct json **elements = xmalloc(4 * sizeof *elements);
+
+        memcpy(elements, array_->elements, 3 * sizeof array_->elements[0]);
+        array_->array.elements = elements;
+        array_->array.elements[3] = element;
+        array_->array.size = 4;
+        array_->array.allocated = 4;
+        array_->storage_type = JSON_ARRAY_DYNAMIC;
+        return;
     }
-    array->elems[array->n++] = element;
+
+    case JSON_STRING_DYNAMIC:
+    case JSON_STRING_INLINE:
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    struct json_array *array = &array_->array;
+    if (array->size >= array->allocated) {
+        array->elements = x2nrealloc(array->elements, &array->allocated,
+                                     sizeof *array->elements);
+    }
+    array->elements[array->size++] = element;
+}
+
+void
+json_array_set(struct json *json, size_t index, struct json *element)
+{
+    ovs_assert(json_array_size(json) > index);
+    if (json->storage_type == JSON_ARRAY_DYNAMIC) {
+        json->array.elements[index] = element;
+    } else {
+        json->elements[index] = element;
+    }
+}
+
+struct json *
+json_array_pop(struct json *json)
+{
+    if (!json_array_size(json)) {
+        return NULL;
+    }
+    if (json->storage_type == JSON_ARRAY_DYNAMIC) {
+        return json->array.elements[--json->array.size];
+    }
+    if (json->storage_type > JSON_ARRAY_INLINE_1) {
+        return json->elements[--json->storage_type - JSON_ARRAY_DYNAMIC];
+    }
+
+    /* Need to fall back to an empty array in case it's the last
+     * inline element. */
+    struct json *element = json->elements[0];
+    json->storage_type = JSON_ARRAY_DYNAMIC;
+    json->array.elements = NULL;
+    json->array.size = 0;
+    json->array.allocated = 0;
+    return element;
 }
 
 void
 json_array_trim(struct json *array_)
 {
-    struct json_array *array = json_array(array_);
-    if (array->n < array->n_allocated){
-        array->n_allocated = array->n;
-        array->elems = xrealloc(array->elems, array->n * sizeof *array->elems);
+    if (array_->storage_type != JSON_ARRAY_DYNAMIC) {
+        return;
+    }
+
+    struct json_array *array = &array_->array;
+    if (array->size < array->allocated) {
+        array->allocated = array->size;
+        array->elements = xrealloc(array->elements,
+                                   array->size * sizeof *array->elements);
     }
 }
 
@@ -240,46 +330,56 @@ struct json *
 json_array_create(struct json **elements, size_t n)
 {
     struct json *json = json_create(JSON_ARRAY);
-    json->array.elems = elements;
-    json->array.n = n;
-    json->array.n_allocated = n;
+    json->storage_type = JSON_ARRAY_DYNAMIC;
+    json->array.elements = elements;
+    json->array.size = n;
+    json->array.allocated = n;
     return json;
 }
 
 struct json *
 json_array_create_1(struct json *elem0)
 {
-    struct json **elems = xmalloc(sizeof *elems);
-    elems[0] = elem0;
-    return json_array_create(elems, 1);
+    struct json *json = json_create(JSON_ARRAY);
+
+    json->storage_type = JSON_ARRAY_INLINE_1;
+    json->elements[0] = elem0;
+
+    return json;
 }
 
 struct json *
 json_array_create_2(struct json *elem0, struct json *elem1)
 {
-    struct json **elems = xmalloc(2 * sizeof *elems);
-    elems[0] = elem0;
-    elems[1] = elem1;
-    return json_array_create(elems, 2);
+    struct json *json = json_create(JSON_ARRAY);
+
+    json->storage_type = JSON_ARRAY_INLINE_2;
+    json->elements[0] = elem0;
+    json->elements[1] = elem1;
+
+    return json;
 }
 
 struct json *
 json_array_create_3(struct json *elem0, struct json *elem1, struct json *elem2)
 {
-    struct json **elems = xmalloc(3 * sizeof *elems);
-    elems[0] = elem0;
-    elems[1] = elem1;
-    elems[2] = elem2;
-    return json_array_create(elems, 3);
+    struct json *json = json_create(JSON_ARRAY);
+
+    json->storage_type = JSON_ARRAY_INLINE_3;
+    json->elements[0] = elem0;
+    json->elements[1] = elem1;
+    json->elements[2] = elem2;
+
+    return json;
 }
 
 bool
 json_array_contains_string(const struct json *json, const char *str)
 {
-    ovs_assert(json->type == JSON_ARRAY);
+    size_t n = json_array_size(json);
 
-    for (size_t i = 0; i < json->array.n; i++) {
-        const struct json *elem = json->array.elems[i];
+    for (size_t i = 0; i < n; i++) {
+        const struct json *elem = json_array_at(json, i);
 
         if (elem->type == JSON_STRING && !strcmp(json_string(elem), str)) {
             return true;
@@ -342,25 +442,53 @@ json_object_put_format(struct json *json,
     va_end(args);
 }
 
+void json_object_put_uuid(struct json *json,
+                          const char *name, const struct uuid *uuid)
+{
+    json_object_put(json, name, json_string_create_uuid(uuid));
+}
+
 const char *
 json_string(const struct json *json)
 {
     ovs_assert(json->type == JSON_STRING);
-    return json->string;
+    return json->storage_type == JSON_STRING_DYNAMIC
+           ? json->str_ptr : json->str;
 }
 
 const char *
 json_serialized_object(const struct json *json)
 {
     ovs_assert(json->type == JSON_SERIALIZED_OBJECT);
-    return json->string;
+    return json->str_ptr;
 }
 
-struct json_array *
-json_array(const struct json *json)
+size_t
+json_array_size(const struct json *json)
 {
     ovs_assert(json->type == JSON_ARRAY);
-    return CONST_CAST(struct json_array *, &json->array);
+    if (json->storage_type == JSON_ARRAY_DYNAMIC) {
+        return json->array.size;
+    }
+    return json->storage_type - JSON_ARRAY_DYNAMIC;
+}
+
+const struct json *
+json_array_at(const struct json *json, size_t index)
+{
+    ovs_assert(json->type == JSON_ARRAY);
+
+    if (json->storage_type == JSON_ARRAY_DYNAMIC) {
+        if (json->array.size <= index) {
+            return NULL;
+        }
+        return json->array.elements[index];
+    }
+
+    if (json->storage_type - JSON_ARRAY_DYNAMIC <= index) {
+        return NULL;
+    }
+    return json->elements[index];
 }
 
 struct shash *
@@ -392,7 +520,7 @@ json_integer(const struct json *json)
 }
 
 static void json_destroy_object(struct shash *object, bool yield);
-static void json_destroy_array(struct json_array *array, bool yield);
+static void json_destroy_array(struct json *json, bool yield);
 
 /* Frees 'json' and everything it points to, recursively. */
 void
@@ -404,12 +532,17 @@ json_destroy__(struct json *json, bool yield)
         break;
 
     case JSON_ARRAY:
-        json_destroy_array(&json->array, yield);
+        json_destroy_array(json, yield);
         break;
 
     case JSON_STRING:
+        if (json->storage_type == JSON_STRING_DYNAMIC) {
+            free(json->str_ptr);
+        }
+        break;
+
     case JSON_SERIALIZED_OBJECT:
-        free(json->string);
+        free(json->str_ptr);
         break;
 
     case JSON_NULL:
@@ -449,26 +582,29 @@ json_destroy_object(struct shash *object, bool yield)
 }
 
 static void
-json_destroy_array(struct json_array *array, bool yield)
+json_destroy_array(struct json *json, bool yield)
 {
-    size_t i;
+    size_t i, n = json_array_size(json);
 
     if (yield) {
         cooperative_multitasking_yield();
     }
 
-    for (i = 0; i < array->n; i++) {
+    for (i = 0; i < n; i++) {
         if (yield) {
-            json_destroy_with_yield(array->elems[i]);
+            json_destroy_with_yield(
+                CONST_CAST(struct json *, json_array_at(json, i)));
         } else {
-            json_destroy(array->elems[i]);
+            json_destroy(CONST_CAST(struct json *, json_array_at(json, i)));
         }
     }
-    free(array->elems);
+    if (json->storage_type == JSON_ARRAY_DYNAMIC) {
+        free(json->array.elements);
+    }
 }
 
 static struct json *json_deep_clone_object(const struct shash *object);
-static struct json *json_deep_clone_array(const struct json_array *array);
+static struct json *json_deep_clone_array(const struct json *);
 
 /* Returns a deep copy of 'json'. */
 struct json *
@@ -479,10 +615,10 @@ json_deep_clone(const struct json *json)
         return json_deep_clone_object(json->object);
 
     case JSON_ARRAY:
-        return json_deep_clone_array(&json->array);
+        return json_deep_clone_array(json);
 
     case JSON_STRING:
-        return json_string_create(json->string);
+        return json_string_create(json_string(json));
 
     case JSON_SERIALIZED_OBJECT:
         return json_serialized_object_create(json);
@@ -525,16 +661,33 @@ json_deep_clone_object(const struct shash *object)
 }
 
 static struct json *
-json_deep_clone_array(const struct json_array *array)
+json_deep_clone_array(const struct json *json)
 {
-    struct json **elems;
-    size_t i;
+    struct json **elements;
+    size_t i, n;
 
-    elems = xmalloc(array->n * sizeof *elems);
-    for (i = 0; i < array->n; i++) {
-        elems[i] = json_deep_clone(array->elems[i]);
+    n = json_array_size(json);
+    switch (n) {
+    case 0:
+        return json_array_create_empty();
+    case 1:
+        return json_array_create_1(json_deep_clone(json_array_at(json, 0)));
+    case 2:
+        return json_array_create_2(json_deep_clone(json_array_at(json, 0)),
+                                   json_deep_clone(json_array_at(json, 1)));
+    case 3:
+        return json_array_create_3(json_deep_clone(json_array_at(json, 0)),
+                                   json_deep_clone(json_array_at(json, 1)),
+                                   json_deep_clone(json_array_at(json, 2)));
+    default:
+        break;
     }
-    return json_array_create(elems, array->n);
+
+    elements = xmalloc(n * sizeof *elements);
+    for (i = 0; i < n; i++) {
+        elements[i] = json_deep_clone(json_array_at(json, i));
+    }
+    return json_array_create(elements, n);
 }
 
 static size_t
@@ -555,13 +708,13 @@ json_hash_object(const struct shash *object, size_t basis)
 }
 
 static size_t
-json_hash_array(const struct json_array *array, size_t basis)
+json_hash_array(const struct json *json, size_t basis)
 {
-    size_t i;
+    size_t i, n = json_array_size(json);
 
-    basis = hash_int(array->n, basis);
-    for (i = 0; i < array->n; i++) {
-        basis = json_hash(array->elems[i], basis);
+    basis = hash_int(n, basis);
+    for (i = 0; i < n; i++) {
+        basis = json_hash(json_array_at(json, i), basis);
     }
     return basis;
 }
@@ -574,11 +727,13 @@ json_hash(const struct json *json, size_t basis)
         return json_hash_object(json->object, basis);
 
     case JSON_ARRAY:
-        return json_hash_array(&json->array, basis);
+        return json_hash_array(json, basis);
 
     case JSON_STRING:
+        return hash_string(json_string(json), basis);
+
     case JSON_SERIALIZED_OBJECT:
-        return hash_string(json->string, basis);
+        return hash_string(json_serialized_object(json), basis);
 
     case JSON_NULL:
     case JSON_FALSE:
@@ -617,16 +772,16 @@ json_equal_object(const struct shash *a, const struct shash *b)
 }
 
 static bool
-json_equal_array(const struct json_array *a, const struct json_array *b)
+json_equal_array(const struct json *a, const struct json *b)
 {
-    size_t i;
+    size_t i, n = json_array_size(a);
 
-    if (a->n != b->n) {
+    if (n != json_array_size(b)) {
         return false;
     }
 
-    for (i = 0; i < a->n; i++) {
-        if (!json_equal(a->elems[i], b->elems[i])) {
+    for (i = 0; i < n; i++) {
+        if (!json_equal(json_array_at(a, i), json_array_at(b, i))) {
             return false;
         }
     }
@@ -650,11 +805,13 @@ json_equal(const struct json *a, const struct json *b)
         return json_equal_object(a->object, b->object);
 
     case JSON_ARRAY:
-        return json_equal_array(&a->array, &b->array);
+        return json_equal_array(a, b);
 
     case JSON_STRING:
+        return !strcmp(json_string(a), json_string(b));
+
     case JSON_SERIALIZED_OBJECT:
-        return !strcmp(a->string, b->string);
+        return !strcmp(json_serialized_object(a), json_serialized_object(b));
 
     case JSON_NULL:
     case JSON_FALSE:
@@ -989,7 +1146,8 @@ json_string_escape(const char *in, struct ds *out)
 {
     struct json json = {
         .type = JSON_STRING,
-        .string = CONST_CAST(char *, in),
+        .storage_type = JSON_STRING_DYNAMIC,
+        .str_ptr = CONST_CAST(char *, in),
     };
     json_to_ds(&json, 0, out);
 }
@@ -1052,8 +1210,7 @@ json_from_string(const char *string)
 struct json *
 json_from_serialized_object(const struct json *json)
 {
-    ovs_assert(json->type == JSON_SERIALIZED_OBJECT);
-    return json_from_string(json->string);
+    return json_from_string(json_serialized_object(json));
 }
 
 /* Reads the file named 'file_name', parses its contents as a JSON object or
@@ -1570,7 +1727,7 @@ struct json_serializer {
 static void json_serialize(const struct json *, struct json_serializer *);
 static void json_serialize_object(const struct shash *object,
                                   struct json_serializer *);
-static void json_serialize_array(const struct json_array *,
+static void json_serialize_array(const struct json *,
                                  struct json_serializer *);
 static void json_serialize_string(const char *, struct ds *);
 
@@ -1633,7 +1790,7 @@ json_serialize(const struct json *json, struct json_serializer *s)
         break;
 
     case JSON_ARRAY:
-        json_serialize_array(&json->array, s);
+        json_serialize_array(json, s);
         break;
 
     case JSON_INTEGER:
@@ -1645,11 +1802,11 @@ json_serialize(const struct json *json, struct json_serializer *s)
         break;
 
     case JSON_STRING:
-        json_serialize_string(json->string, ds);
+        json_serialize_string(json_string(json), ds);
         break;
 
     case JSON_SERIALIZED_OBJECT:
-        ds_put_cstr(ds, json->string);
+        ds_put_cstr(ds, json_serialized_object(json));
         break;
 
     case JSON_N_TYPES:
@@ -1725,10 +1882,10 @@ json_serialize_object(const struct shash *object, struct json_serializer *s)
 }
 
 static void
-json_serialize_array(const struct json_array *array, struct json_serializer *s)
+json_serialize_array(const struct json *json, struct json_serializer *s)
 {
+    size_t i, n = json_array_size(json);
     struct ds *ds = s->ds;
-    size_t i;
 
     ds_put_char(ds, '[');
     s->depth++;
@@ -1737,15 +1894,15 @@ json_serialize_array(const struct json_array *array, struct json_serializer *s)
         cooperative_multitasking_yield();
     }
 
-    if (array->n > 0) {
+    if (n > 0) {
         indent_line(s);
 
-        for (i = 0; i < array->n; i++) {
+        for (i = 0; i < n; i++) {
             if (i) {
                 ds_put_char(ds, ',');
                 indent_line(s);
             }
-            json_serialize(array->elems[i], s);
+            json_serialize(json_array_at(json, i), s);
         }
     }
 

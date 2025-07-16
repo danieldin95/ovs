@@ -60,7 +60,7 @@ test_json_equal_object(const struct shash *a, const struct shash *b,
 }
 
 static void
-test_json_equal_array(const struct json_array *a, const struct json_array *b,
+test_json_equal_array(const struct json *a, const struct json *b,
                       bool allow_the_same)
 {
     ovs_assert(allow_the_same || a != b);
@@ -69,10 +69,12 @@ test_json_equal_array(const struct json_array *a, const struct json_array *b,
         return;
     }
 
-    ovs_assert(a->n == b->n);
+    size_t n = json_array_size(a);
+    ovs_assert(n == json_array_size(b));
 
-    for (size_t i = 0; i < a->n; i++) {
-        test_json_equal(a->elems[i], b->elems[i], allow_the_same);
+    for (size_t i = 0; i < n; i++) {
+        test_json_equal(json_array_at(a, i), json_array_at(b, i),
+                        allow_the_same);
     }
 }
 
@@ -96,13 +98,18 @@ test_json_equal(const struct json *a, const struct json *b,
         return;
 
     case JSON_ARRAY:
-        test_json_equal_array(&a->array, &b->array, allow_the_same);
+        test_json_equal_array(a, b, allow_the_same);
         return;
 
     case JSON_STRING:
+        ovs_assert(json_string(a) != json_string(b));
+        ovs_assert(!strcmp(json_string(a), json_string(b)));
+        return;
+
     case JSON_SERIALIZED_OBJECT:
-        ovs_assert(a->string != b->string);
-        ovs_assert(!strcmp(a->string, b->string));
+        ovs_assert(json_serialized_object(a) != json_serialized_object(b));
+        ovs_assert(!strcmp(json_serialized_object(a),
+                           json_serialized_object(b)));
         return;
 
     case JSON_NULL:
@@ -154,7 +161,7 @@ print_test_and_free_json(struct json *json)
 {
     bool ok;
     if (json->type == JSON_STRING) {
-        printf("error: %s\n", json->string);
+        printf("error: %s\n", json_string(json));
         ok = false;
     } else {
         char *s = json_to_string(json, JSSF_SORT | (pretty ? JSSF_PRETTY : 0));

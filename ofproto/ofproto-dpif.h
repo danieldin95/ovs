@@ -51,6 +51,7 @@
 #include "hmapx.h"
 #include "odp-util.h"
 #include "id-pool.h"
+#include "ovs-atomic.h"
 #include "ovs-thread.h"
 #include "ofproto-provider.h"
 #include "util.h"
@@ -202,7 +203,8 @@ struct group_dpif *group_dpif_lookup(struct ofproto_dpif *,
     DPIF_SUPPORT_FIELD(bool, ct_timeout, "Conntrack timeout policy")        \
                                                                             \
     /* True if the datapath supports explicit drop action. */               \
-    DPIF_SUPPORT_FIELD(bool, explicit_drop_action, "Explicit Drop action")  \
+    DPIF_SUPPORT_FIELD(atomic_bool, explicit_drop_action,                   \
+                       "Explicit Drop action")                              \
                                                                             \
     /* True if the datapath supports balance_tcp optimization */            \
     DPIF_SUPPORT_FIELD(bool, lb_output_action, "Optimized Balance TCP mode")\
@@ -211,7 +213,10 @@ struct group_dpif *group_dpif_lookup(struct ofproto_dpif *,
     DPIF_SUPPORT_FIELD(bool, ct_zero_snat, "Conntrack all-zero IP SNAT")    \
                                                                             \
     /* True if the datapath supports add_mpls action. */                    \
-    DPIF_SUPPORT_FIELD(bool, add_mpls, "MPLS Label add")
+    DPIF_SUPPORT_FIELD(bool, add_mpls, "MPLS Label add")                    \
+                                                                            \
+    /* True if the datapath supports psample action. */                     \
+    DPIF_SUPPORT_FIELD(bool, psample, "psample action")
 
 
 /* Stores the various features which the corresponding backer supports. */
@@ -326,6 +331,7 @@ struct ofproto_dpif {
     struct netflow *netflow;
     struct dpif_sflow *sflow;
     struct dpif_ipfix *ipfix;
+    struct dpif_lsample *lsample;
     struct hmap bundles;        /* Contains "struct ofbundle"s. */
     struct mac_learning *ml;
     struct mcast_snooping *ms;
@@ -359,6 +365,8 @@ struct ofproto_dpif {
 
     bool is_controller_connected; /* True if any controller admitted this
                                    * switch connection. */
+    bool explicit_sampled_drops;  /* If explicit drop actions must added after
+                                   * trailing sample actions. */
 };
 
 struct ofproto_dpif *ofproto_dpif_lookup_by_name(const char *name);
@@ -409,5 +417,6 @@ bool ofproto_dpif_ct_zone_timeout_policy_get_name(
     uint8_t nw_proto, char **tp_name, bool *unwildcard);
 
 bool ovs_explicit_drop_action_supported(struct ofproto_dpif *);
+bool ovs_psample_supported(struct ofproto_dpif *);
 
 #endif /* ofproto-dpif.h */

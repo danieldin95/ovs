@@ -1178,8 +1178,14 @@ AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdev zone=2 icmp_first=2 icmp_reply=3])],
 ])
 AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:2, Timeout Policies: icmp_first=2 icmp_reply=3
 ])
+AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdev zone=UNKNOWN icmp_first=2 icmp_reply=3])],
+  [1], [], [ovs-vsctl: invalid zone argument, zone=UNKNOWN
+])
 AT_CHECK([RUN_OVS_VSCTL([del-zone-tp netdev zone=11])],
   [1], [], [ovs-vsctl: zone id 11 does not have a policy
+])
+AT_CHECK([RUN_OVS_VSCTL([del-zone-tp netdev zone=UNKNOWN])],
+  [1], [], [ovs-vsctl: invalid zone argument, zone=UNKNOWN
 ])
 AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:2, Timeout Policies: icmp_first=2 icmp_reply=3
 ])
@@ -1205,6 +1211,15 @@ AT_CHECK([RUN_OVS_VSCTL([set-zone-limit netdev default -1])],
 ])
 AT_CHECK([RUN_OVS_VSCTL([del-zone-limit netdev default])],
   [1], [], [ovs-vsctl: datapath netdev does not have a limit
+])
+AT_CHECK([RUN_OVS_VSCTL([set-zone-limit netdev UNKNOWN 1])],
+  [1], [], [ovs-vsctl: invalid zone id, UNKNOWN
+])
+AT_CHECK([RUN_OVS_VSCTL([set-zone-limit netdev default VALUE])],
+  [1], [], [ovs-vsctl: invalid limit, VALUE
+])
+AT_CHECK([RUN_OVS_VSCTL([del-zone-limit netdev UNKNOWN])],
+  [1], [], [ovs-vsctl: invalid zone id, UNKNOWN
 ])
 
 AT_CHECK([RUN_OVS_VSCTL([-- --id=@m create Datapath datapath_version=0 'capabilities={recirc=true}' -- set Open_vSwitch . datapaths:"system"=@m])], [0], [stdout])
@@ -1598,7 +1613,6 @@ m4_foreach(
 [ovs-dummy],
 [genev_sys],
 [gre_sys],
-[lisp_sys],
 [vxlan_sys]],
 [
 # Try creating the port
@@ -1606,7 +1620,11 @@ cat >experr <<EOF
 ovs-vsctl: Error detected while setting up 'reserved_name'.  See ovs-vswitchd log for details.
 ovs-vsctl: The default log directory is "$OVS_RUNDIR".
 EOF
-AT_CHECK([ovs-vsctl add-port br0 reserved_name], [0], [], [experr])
+if test "$IS_WIN32" = "yes"; then
+AT_CHECK([ovs-vsctl add-port br0 reserved_name], [160], [], [experr])
+else
+AT_CHECK([ovs-vsctl add-port br0 reserved_name], [65], [], [experr])
+fi
 # Prevent race.
 OVS_WAIT_UNTIL([test `grep -- "|WARN|" ovs-vswitchd.log | wc -l` -ge 1])
 # Detect the warning log message
@@ -1624,19 +1642,16 @@ AT_SETUP([add-port -- reserved names 2])
 # Creates all type of tunnel ports
 OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=gre \
                     options:remote_ip=1.1.1.1 ofport_request=1\
-                    -- add-port br0 p3 -- set Interface p3 type=lisp \
+                    -- add-port br0 p3 -- set Interface p3 type=vxlan \
                     options:remote_ip=2.2.2.2 ofport_request=3 \
-                    -- add-port br0 p4 -- set Interface p4 type=vxlan \
-                    options:remote_ip=2.2.2.2 ofport_request=4 \
-                    -- add-port br0 p5 -- set Interface p5 type=geneve \
-                    options:remote_ip=2.2.2.2 ofport_request=5])
+                    -- add-port br0 p4 -- set Interface p4 type=geneve \
+                    options:remote_ip=2.2.2.2 ofport_request=4])
 
 # Test creating all reserved tunnel port names
 m4_foreach(
 [reserved_name],
 [[genev_sys],
 [gre_sys],
-[lisp_sys],
 [vxlan_sys]],
 [
 # Try creating the port
@@ -1644,7 +1659,11 @@ cat >experr <<EOF
 ovs-vsctl: Error detected while setting up 'reserved_name'.  See ovs-vswitchd log for details.
 ovs-vsctl: The default log directory is "$OVS_RUNDIR".
 EOF
-AT_CHECK([ovs-vsctl add-port br0 reserved_name], [0], [], [experr])
+if test "$IS_WIN32" = "yes"; then
+AT_CHECK([ovs-vsctl add-port br0 reserved_name], [160], [], [experr])
+else
+AT_CHECK([ovs-vsctl add-port br0 reserved_name], [65], [], [experr])
+fi
 # Prevent race.
 OVS_WAIT_UNTIL([test `grep -- "|WARN|" ovs-vswitchd.log | wc -l` -ge 1])
 # Detect the warning log message
@@ -1734,7 +1753,6 @@ AT_CLEANUP
 AT_SETUP([TLS server name indication (SNI)])
 AT_KEYWORDS([ovsdb server positive ssl tls sni])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
-AT_SKIP_IF([test "$OPENSSL_SUPPORTS_SNI" = no])
 AT_SKIP_IF([test "$HAVE_UNBOUND" = no])
 OVSDB_INIT([conf.db])
 PKIDIR=$abs_top_builddir/tests
@@ -1820,4 +1838,113 @@ name=tst1 -- add open . bridges @a
 AT_CHECK([ovs-vsctl --no-wait --bare --columns _uuid,name list bridge tst1], [0], [ignore])
 
 OVS_VSCTL_CLEANUP
+AT_CLEANUP
+
+AT_SETUP([ovs-vsctl -- return error if OVSDB reload issues are reported])
+OVS_VSWITCHD_START
+
+cat >experr << EOF
+ovs-vsctl: Error detected while setting up 'gre0': gre0: bad ip6gre 'remote_ip'
+gre0: ip6gre type requires valid 'remote_ip' argument.  See ovs-vswitchd log for details.
+ovs-vsctl: The default log directory is "$OVS_RUNDIR".
+EOF
+if test "$IS_WIN32" = "yes"; then
+AT_CHECK([ovs-vsctl add-port br0 gre0 -- set interface gre0 type=ip6gre \
+options:key=100 options:remote_ip=192.168.0.300], [160], [], [experr])
+else
+AT_CHECK([ovs-vsctl add-port br0 gre0 -- set interface gre0 type=ip6gre \
+options:key=100 options:remote_ip=192.168.0.300], [65], [], [experr])
+fi
+OVS_VSWITCHD_STOP(["/is not a valid IP address/d
+/netdev_vport|WARN|gre0: bad ip6gre 'remote_ip'/d
+/netdev|WARN|gre0: could not set configuration/d"])
+AT_CLEANUP
+
+AT_SETUP([ovs-vsctl filter option usage])
+AT_KEYWORDS([ovs-vsctl filter option])
+
+OVS_VSWITCHD_START([dnl
+   add-port br0 p1 -- set Interface p1 type=internal ofport_request=1 -- \
+   add-port br0 tunnel_port \
+    -- set Interface tunnel_port type=geneve \
+           options:remote_ip=1.2.3.4 options:key=123 -- \
+   add-port br0 tunnel_port2 \
+    -- set Interface tunnel_port2 type=geneve \
+           options:remote_ip=1.2.3.5 options:key=125
+])
+
+m4_define([FILTER], [grep -E '(Port|Interface)' | sort])
+
+AT_CHECK([ovs-vsctl --filter='geneve,interface(1.2.3.5)' show | FILTER], [0], [dnl
+            Interface tunnel_port2
+        Port br0
+        Port p1
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='interface(1.2.3.5),geneve' show | FILTER], [0], [dnl
+            Interface tunnel_port2
+        Port br0
+        Port p1
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='interface(1.2.3.5)' show | FILTER], [0], [dnl
+            Interface tunnel_port2
+        Port br0
+        Port p1
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='geneve' show | FILTER], [0], [dnl
+            Interface br0
+            Interface p1
+            Interface tunnel_port
+            Interface tunnel_port2
+        Port br0
+        Port p1
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='port(geneve),interface(1.2.3.5)' show | FILTER], [0], [dnl
+            Interface tunnel_port2
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='port(geneve),interface(123|125)' show | FILTER], [0], [dnl
+            Interface tunnel_port
+            Interface tunnel_port2
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='interface(geneve)' show | FILTER], [0], [dnl
+            Interface tunnel_port
+            Interface tunnel_port2
+        Port br0
+        Port p1
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='interface(p1),interface(p2)' show | FILTER], [0], [dnl
+            Interface p1
+        Port br0
+        Port p1
+        Port tunnel_port
+        Port tunnel_port2
+])
+
+AT_CHECK([ovs-vsctl --filter='interface1(p1)' show], [1], [stdout], [dnl
+ovs-vsctl: unknown table "interface1"
+])
+
+AT_CHECK([ovs-vsctl  --filter=$'interface\x28p1' show], [1], [stdout], [dnl
+ovs-vsctl: Malformed filter: missing closing ')'
+])
+
 AT_CLEANUP

@@ -454,6 +454,9 @@ static const struct nl_policy tca_flower_policy[] = {
     [TCA_FLOWER_KEY_ENC_OPTS] = { .type = NL_A_NESTED, .optional = true, },
     [TCA_FLOWER_KEY_ENC_OPTS_MASK] = { .type = NL_A_NESTED,
                                        .optional = true, },
+    [TCA_FLOWER_KEY_ENC_FLAGS] = { .type = NL_A_BE32, .optional = true, },
+    [TCA_FLOWER_KEY_ENC_FLAGS_MASK] = { .type = NL_A_BE32,
+                                        .optional = true, },
     [TCA_FLOWER_KEY_CT_STATE] = { .type = NL_A_U16, .optional = true, },
     [TCA_FLOWER_KEY_CT_STATE_MASK] = { .type = NL_A_U16, .optional = true, },
     [TCA_FLOWER_KEY_CT_ZONE] = { .type = NL_A_U16, .optional = true, },
@@ -865,6 +868,13 @@ nl_parse_flower_tunnel(struct nlattr **attrs, struct tc_flower *flower)
         flower->tunnel = true;
     }
 
+    if (attrs[TCA_FLOWER_KEY_ENC_FLAGS_MASK]) {
+        flower->key.tunnel.tc_enc_flags = ntohl(
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ENC_FLAGS]));
+        flower->mask.tunnel.tc_enc_flags = ntohl(
+            nl_attr_get_be32(attrs[TCA_FLOWER_KEY_ENC_FLAGS_MASK]));
+    }
+
     if (attrs[TCA_FLOWER_KEY_ENC_OPTS] &&
         attrs[TCA_FLOWER_KEY_ENC_OPTS_MASK]) {
          err = nl_parse_flower_tunnel_opts(attrs[TCA_FLOWER_KEY_ENC_OPTS],
@@ -1219,6 +1229,7 @@ static const struct nl_policy tunnel_key_policy[] = {
     [TCA_TUNNEL_KEY_ENC_TTL] = { .type = NL_A_U8, .optional = true, },
     [TCA_TUNNEL_KEY_ENC_OPTS] = { .type = NL_A_NESTED, .optional = true, },
     [TCA_TUNNEL_KEY_NO_CSUM] = { .type = NL_A_U8, .optional = true, },
+    [TCA_TUNNEL_KEY_NO_FRAG] = { .type = NL_A_FLAG, .optional = true, },
 };
 
 static int
@@ -1384,6 +1395,7 @@ nl_parse_act_tunnel_key(struct nlattr *options, struct tc_flower *flower)
         struct nlattr *ttl = tun_attrs[TCA_TUNNEL_KEY_ENC_TTL];
         struct nlattr *tun_opt = tun_attrs[TCA_TUNNEL_KEY_ENC_OPTS];
         struct nlattr *no_csum = tun_attrs[TCA_TUNNEL_KEY_NO_CSUM];
+        struct nlattr *no_frag = tun_attrs[TCA_TUNNEL_KEY_NO_FRAG];
 
         action = &flower->actions[flower->action_count++];
         action->type = TC_ACT_ENCAP;
@@ -1401,6 +1413,7 @@ nl_parse_act_tunnel_key(struct nlattr *options, struct tc_flower *flower)
         action->encap.tos = tos ? nl_attr_get_u8(tos) : 0;
         action->encap.ttl = ttl ? nl_attr_get_u8(ttl) : 0;
         action->encap.no_csum = no_csum ? nl_attr_get_u8(no_csum) : 0;
+        action->encap.dont_fragment = no_frag ? true : false;
 
         err = nl_parse_act_tunnel_opts(tun_opt, action);
         if (err) {
@@ -2737,6 +2750,9 @@ nl_msg_put_act_tunnel_key_set(struct ofpbuf *request,
             nl_msg_put_be16(request, TCA_TUNNEL_KEY_ENC_DST_PORT,
                             encap->tp_dst);
         }
+        if (encap->dont_fragment) {
+            nl_msg_put_flag(request, TCA_TUNNEL_KEY_NO_FRAG);
+        }
         nl_msg_put_act_tunnel_vxlan_opts(request, encap);
         nl_msg_put_act_tunnel_geneve_option(request, &encap->data);
         nl_msg_put_u8(request, TCA_TUNNEL_KEY_NO_CSUM, encap->no_csum);
@@ -2958,7 +2974,10 @@ csum_update_flag(struct tc_flower *flower,
      * eth(dst=<mac>),eth_type(0x0800) actions=set(ipv4(src=<new_ip>))
      * we need to force a more specific flow as this can, for example,
      * need a recalculation of icmp checksum if the packet that passes
-     * is ICMPv6 and tcp checksum if its tcp. */
+     * is ICMPv6 and tcp checksum if its tcp.
+     *
+     * This section of the code must be kept in sync with the pre-check
+     * function in netdev-offload-tc.c, tc_will_add_l4_checksum(). */
 
     switch (htype) {
     case TCA_PEDIT_KEY_EX_HDR_TYPE_IP4:
@@ -3056,16 +3075,16 @@ nl_msg_put_flower_rewrite_pedits(struct ofpbuf *request,
                                  struct tc_action *action,
                                  uint32_t action_pc)
 {
-    struct {
+    union {
         struct tc_pedit sel;
-        struct tc_pedit_key keys[MAX_PEDIT_OFFSETS];
-        struct tc_pedit_key_ex keys_ex[MAX_PEDIT_OFFSETS];
-    } sel = {
-        .sel = {
-            .nkeys = 0
-        }
-    };
+        uint8_t buffer[sizeof(struct tc_pedit)
+                       + MAX_PEDIT_OFFSETS * sizeof(struct tc_pedit_key)];
+    } sel;
+    struct tc_pedit_key_ex keys_ex[MAX_PEDIT_OFFSETS];
     int i, j, err;
+
+    memset(&sel, 0, sizeof sel);
+    memset(keys_ex, 0, sizeof keys_ex);
 
     for (i = 0; i < ARRAY_SIZE(flower_pedit_map); i++) {
         struct flower_key_to_pedit *m = &flower_pedit_map[i];
@@ -3100,8 +3119,8 @@ nl_msg_put_flower_rewrite_pedits(struct ofpbuf *request,
                 return EOPNOTSUPP;
             }
 
-            pedit_key = &sel.keys[sel.sel.nkeys];
-            pedit_key_ex = &sel.keys_ex[sel.sel.nkeys];
+            pedit_key = &sel.sel.keys[sel.sel.nkeys];
+            pedit_key_ex = &keys_ex[sel.sel.nkeys];
             pedit_key_ex->cmd = TCA_PEDIT_KEY_EX_CMD_SET;
             pedit_key_ex->htype = m->htype;
             pedit_key->off = cur_offset;
@@ -3121,7 +3140,7 @@ nl_msg_put_flower_rewrite_pedits(struct ofpbuf *request,
             }
         }
     }
-    nl_msg_put_act_pedit(request, &sel.sel, sel.keys_ex,
+    nl_msg_put_act_pedit(request, &sel.sel, keys_ex,
                          flower->csum_update_flags ? TC_ACT_PIPE : action_pc);
 
     return 0;
@@ -3611,6 +3630,7 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
     struct in6_addr *ipv6_src = &flower->key.tunnel.ipv6.ipv6_src;
     struct in6_addr *ipv6_dst = &flower->key.tunnel.ipv6.ipv6_dst;
     ovs_be32 id = be64_to_be32(flower->key.tunnel.id);
+    ovs_be32 enc_flags = htonl(flower->key.tunnel.tc_enc_flags);
     ovs_be16 tp_src = flower->key.tunnel.tp_src;
     ovs_be16 tp_dst = flower->key.tunnel.tp_dst;
     uint8_t tos = flower->key.tunnel.tos;
@@ -3618,6 +3638,7 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
     uint8_t tos_mask = flower->mask.tunnel.tos;
     uint8_t ttl_mask = flower->mask.tunnel.ttl;
     ovs_be64 id_mask = flower->mask.tunnel.id;
+    ovs_be32 enc_flags_mask = htonl(flower->mask.tunnel.tc_enc_flags);
     ovs_be16 tp_src_mask = flower->mask.tunnel.tp_src;
     ovs_be16 tp_dst_mask = flower->mask.tunnel.tp_dst;
 
@@ -3654,6 +3675,11 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
         nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT, tp_dst);
         nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK,
                         tp_dst_mask);
+    }
+    if (enc_flags_mask) {
+        nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_FLAGS, enc_flags);
+        nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_FLAGS_MASK,
+                        enc_flags_mask);
     }
     if (id_mask) {
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_KEY_ID, id);
@@ -3961,6 +3987,7 @@ tc_replace_flower(struct tcf_id *id, struct tc_flower *flower)
         struct ofpbuf b = ofpbuf_const_initializer(reply->data, reply->size);
         struct nlmsghdr *nlmsg = ofpbuf_try_pull(&b, sizeof *nlmsg);
         struct tcmsg *tc = ofpbuf_try_pull(&b, sizeof *tc);
+        bool is_probe = id->prio == TC_RESERVED_PRIORITY_FEATURE_PROBE;
 
         if (!nlmsg || !tc) {
             COVERAGE_INC(tc_netlink_malformed_reply);
@@ -3980,9 +4007,14 @@ tc_replace_flower(struct tcf_id *id, struct tc_flower *flower)
                                              false);
 
             if (ret || !cmp_tc_flower_match_action(flower, &flower_out)) {
-                VLOG_WARN_RL(&error_rl, "Kernel flower acknowledgment does "
-                             "not match request!  Set dpif_netlink to dbg to "
-                             "see which rule caused this error.");
+                if (is_probe) {
+                    error = EINVAL;
+                } else {
+                    VLOG_WARN_RL(&error_rl, "Kernel flower acknowledgment "
+                                            "does not match request!  Set "
+                                            "dpif_netlink to dbg to see "
+                                            "which rule caused this error.");
+                }
             }
         }
         ofpbuf_delete(reply);

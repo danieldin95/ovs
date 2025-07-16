@@ -57,8 +57,6 @@ VLOG_DEFINE_THIS_MODULE(netdev_vport);
 
 #define GENEVE_DST_PORT 6081
 #define VXLAN_DST_PORT 4789
-#define LISP_DST_PORT 4341
-#define STT_DST_PORT 7471
 
 #define DEFAULT_TTL 64
 
@@ -119,7 +117,6 @@ netdev_vport_needs_dst_port(const struct netdev *dev)
 
     return (class->get_config == get_tunnel_config &&
             (!strcmp("geneve", type) || !strcmp("vxlan", type) ||
-             !strcmp("lisp", type) || !strcmp("stt", type) ||
              !strcmp("gtpu", type) || !strcmp("bareudp",type)));
 }
 
@@ -224,10 +221,6 @@ netdev_vport_construct(struct netdev *netdev_)
     } else if (!strcmp(type, "vxlan")) {
         tnl_cfg->dst_port = port ? htons(port) : htons(VXLAN_DST_PORT);
         update_vxlan_global_cfg(netdev_, NULL, tnl_cfg);
-    } else if (!strcmp(type, "lisp")) {
-        tnl_cfg->dst_port = port ? htons(port) : htons(LISP_DST_PORT);
-    } else if (!strcmp(type, "stt")) {
-        tnl_cfg->dst_port = port ? htons(port) : htons(STT_DST_PORT);
     } else if (!strcmp(type, "gtpu")) {
         tnl_cfg->dst_port = port ? htons(port) : htons(GTPU_DST_PORT);
     } else if (!strcmp(type, "bareudp")) {
@@ -478,9 +471,7 @@ static enum tunnel_layers
 tunnel_supported_layers(const char *type,
                         const struct netdev_tunnel_config *tnl_cfg)
 {
-    if (!strcmp(type, "lisp")) {
-        return TNL_L3;
-    } else if (!strcmp(type, "gre")) {
+    if (!strcmp(type, "gre")) {
         return TNL_L2 | TNL_L3;
     } else if (!strcmp(type, "vxlan")
                && tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GPE)) {
@@ -628,7 +619,7 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
     int err;
 
     has_csum = strstr(type, "gre") || strstr(type, "geneve") ||
-               strstr(type, "stt") || strstr(type, "vxlan");
+               strstr(type, "vxlan");
     has_seq = strstr(type, "gre");
     memset(&tnl_cfg, 0, sizeof tnl_cfg);
 
@@ -639,14 +630,6 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
 
     if (!strcmp(type, "vxlan")) {
         tnl_cfg.dst_port = htons(VXLAN_DST_PORT);
-    }
-
-    if (!strcmp(type, "lisp")) {
-        tnl_cfg.dst_port = htons(LISP_DST_PORT);
-    }
-
-    if (!strcmp(type, "stt")) {
-        tnl_cfg.dst_port = htons(STT_DST_PORT);
     }
 
     if (!strcmp(type, "gtpu")) {
@@ -702,7 +685,9 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
             tnl_cfg.dst_port = htons(atoi(node->value));
         } else if (!strcmp(node->key, "csum") && has_csum) {
             if (!strcmp(node->value, "true")) {
-                tnl_cfg.csum = true;
+                tnl_cfg.csum = NETDEV_TNL_CSUM_ENABLED;
+            } else if (!strcmp(node->value, "false")) {
+                tnl_cfg.csum = NETDEV_TNL_CSUM_DISABLED;
             }
         } else if (!strcmp(node->key, "seq") && has_seq) {
             if (!strcmp(node->value, "true")) {
@@ -838,7 +823,8 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
             }
         } else if (!strcmp(node->key, "remote_cert") ||
                    !strcmp(node->key, "remote_name") ||
-                   !strcmp(node->key, "psk")) {
+                   !strcmp(node->key, "psk") ||
+                   !strncmp(node->key, "ipsec_", strlen("ipsec_"))) {
             /* When configuring OVS for IPsec, these keys may be set in the
                tunnel port's 'options' column. 'ovs-vswitchd' does not directly
                use them, but they are read by 'ovs-monitor-ipsec'. In order to
@@ -848,6 +834,15 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
             ds_put_format(&errors, "%s: unknown %s argument '%s'\n", name,
                           type, node->key);
         }
+    }
+
+    /* The default csum state for GRE is special as it does have an optional
+     * checksum but the default configuration isn't correlated with IP version
+     * like UDP tunnels are.  Likewise, tunnels with no checksum at all must be
+     * in this state. */
+    if (tnl_cfg.csum == NETDEV_TNL_CSUM_DEFAULT &&
+        (!has_csum || strstr(type, "gre"))) {
+        tnl_cfg.csum = NETDEV_TNL_DEFAULT_NO_CSUM;
     }
 
     enum tunnel_layers layers = tunnel_supported_layers(type, &tnl_cfg);
@@ -1018,16 +1013,16 @@ get_tunnel_config(const struct netdev *dev, struct smap *args)
 
         if ((!strcmp("geneve", type) && dst_port != GENEVE_DST_PORT) ||
             (!strcmp("vxlan", type) && dst_port != VXLAN_DST_PORT) ||
-            (!strcmp("lisp", type) && dst_port != LISP_DST_PORT) ||
-            (!strcmp("stt", type) && dst_port != STT_DST_PORT) ||
             (!strcmp("gtpu", type) && dst_port != GTPU_DST_PORT) ||
             !strcmp("bareudp", type)) {
             smap_add_format(args, "dst_port", "%d", dst_port);
         }
     }
 
-    if (tnl_cfg->csum) {
+    if (tnl_cfg->csum == NETDEV_TNL_CSUM_ENABLED) {
         smap_add(args, "csum", "true");
+    } else if (tnl_cfg->csum == NETDEV_TNL_CSUM_DISABLED) {
+        smap_add(args, "csum", "false");
     }
 
     if (tnl_cfg->set_seq) {
@@ -1297,20 +1292,6 @@ netdev_vport_tunnel_register(void)
               .push_header = netdev_tnl_push_udp_header,
               .pop_header = netdev_vxlan_pop_header,
               .get_ifindex = NETDEV_VPORT_GET_IFINDEX
-          },
-          {{NULL, NULL, 0, 0}}
-        },
-        { "lisp_sys",
-          {
-              TUNNEL_FUNCTIONS_COMMON,
-              .type = "lisp"
-          },
-          {{NULL, NULL, 0, 0}}
-        },
-        { "stt_sys",
-          {
-              TUNNEL_FUNCTIONS_COMMON,
-              .type = "stt"
           },
           {{NULL, NULL, 0, 0}}
         },

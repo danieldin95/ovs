@@ -8,6 +8,8 @@
 AUTOMAKE_OPTIONS = foreign subdir-objects
 ACLOCAL_AMFLAGS = -I m4
 
+AM_DISTCHECK_CONFIGURE_FLAGS = --with-version-suffix="$(VERSION_SUFFIX)"
+
 AM_CPPFLAGS = $(SSL_CFLAGS)
 AM_LDFLAGS = $(SSL_LDFLAGS)
 AM_LDFLAGS += $(OVS_LDFLAGS)
@@ -163,6 +165,7 @@ SUFFIXES += .in
 	    -e 's,[@]PYTHON3[@],$(PYTHON3),g' \
 	    -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
 	    -e 's,[@]VERSION[@],$(VERSION),g' \
+	    -e 's,[@]VERSION_SUFFIX[@],$(VERSION_SUFFIX),g' \
 	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
 	    -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
 	    -e 's,[@]sysconfdir[@],$(sysconfdir),g' \
@@ -336,6 +339,8 @@ check-tabs:
 	fi
 .PHONY: check-tabs
 
+# NOTE: test-lib-route-table.c excluded due to use of system() to execute
+#       ip route commands provided as arguments by test suite.
 ALL_LOCAL += thread-safety-check
 thread-safety-check:
 	@cd $(srcdir); \
@@ -343,7 +348,8 @@ thread-safety-check:
 	  grep -n -f build-aux/thread-safety-forbidden \
 	    `git ls-files | grep '\.[ch]$$' \
 	      | $(EGREP) -v '^datapath-windows|^lib/sflow|^third-party'` /dev/null \
-	      | $(EGREP) -v ':[ 	]*/?\*'; \
+	      | $(EGREP) -v ':[ 	]*/?\*' \
+	      | $(EGREP) -v '^tests/test-lib-route-table.c'; \
 	then \
 	  echo "See above for list of calls to functions that are"; \
 	  echo "forbidden due to thread safety issues"; \
@@ -400,18 +406,13 @@ ALL_LOCAL += flake8-check
 #   W504 line break after binary operator
 # F*** -- warnings native to flake8
 #   F811 redefinition of unused <name> from line <N> (only from flake8 v2.0)
+#   F824 a `global` or `nonlocal` statement where the name is never reassigned
 # D*** -- warnings from flake8-docstrings plugin
 # H*** -- warnings from flake8 hacking plugin (custom style checks beyond PEP8)
-#   H231 Python 3.x incompatible 'except x,y:' construct
-#   H232 Python 3.x incompatible octal 077 should be written as 0o77
-#   H233 Python 3.x incompatible use of print operator
-#   H238 old style class declaration, use new style (inherit from `object`)
-FLAKE8_SELECT = H231,H232,H233,H238
-FLAKE8_IGNORE = E121,E123,E125,E126,E127,E128,E129,E131,E203,E722,W503,W504,F811,D,H,I
+FLAKE8_IGNORE = E121,E123,E125,E126,E127,E128,E129,E131,E203,E722,W503,W504,F811,F824,D,H,I
 flake8-check: $(FLAKE8_PYFILES)
 	$(FLAKE8_WERROR)$(AM_V_GEN) \
 	  src='$^' && \
-	  flake8 $$src --select=$(FLAKE8_SELECT) $(FLAKE8_FLAGS) && \
 	  flake8 $$src --ignore=$(FLAKE8_IGNORE) $(FLAKE8_FLAGS) && \
 	  touch $@
 endif

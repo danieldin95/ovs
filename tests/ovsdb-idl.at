@@ -87,7 +87,7 @@ m4_define([OVSDB_CLUSTER_START_IDLTEST],
 #
 # TITLE is provided to AT_SETUP and KEYWORDS to AT_KEYWORDS.
 m4_define([OVSDB_CHECK_IDL_C],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -101,7 +101,7 @@ m4_define([OVSDB_CHECK_IDL_C],
 
 # same as OVSDB_CHECK_IDL but uses OVSDB_IDL_WRITE_CHANGED_ONLY.
 m4_define([OVSDB_CHECK_IDL_WRITE_CHANGED_ONLY_C],
-  [AT_SETUP([$1 - write-changed-only - C])
+  [AT_SETUP([ovsdb-idl - $1 - write-changed-only - C])
    AT_KEYWORDS([ovsdb server idl positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -115,7 +115,7 @@ m4_define([OVSDB_CHECK_IDL_WRITE_CHANGED_ONLY_C],
 
 # same as OVSDB_CHECK_IDL but uses tcp.
 m4_define([OVSDB_CHECK_IDL_TCP_C],
-  [AT_SETUP([$1 - C - tcp])
+  [AT_SETUP([ovsdb-idl - $1 - C - tcp])
    AT_KEYWORDS([ovsdb server idl positive tcp socket $5])
    OVSDB_START_IDLTEST(["ptcp:0:127.0.0.1"])
    PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
@@ -131,7 +131,7 @@ m4_define([OVSDB_CHECK_IDL_TCP_C],
 
 # same as OVSDB_CHECK_IDL but uses tcp6.
 m4_define([OVSDB_CHECK_IDL_TCP6_C],
-  [AT_SETUP([$1 - C - tcp6])
+  [AT_SETUP([ovsdb-idl - $1 - C - tcp6])
    AT_SKIP_IF([test "$IS_WIN32" = "yes"])
    AT_SKIP_IF([test $HAVE_IPV6 = no])
    AT_KEYWORDS([ovsdb server idl positive tcp6 socket $5])
@@ -149,7 +149,7 @@ m4_define([OVSDB_CHECK_IDL_TCP6_C],
 
 # same as OVSDB_CHECK_IDL but uses the Python IDL implementation.
 m4_define([OVSDB_CHECK_IDL_PY],
-  [AT_SETUP([$1 - Python3])
+  [AT_SETUP([ovsdb-idl - $1 - Python3])
    AT_KEYWORDS([ovsdb server idl positive Python $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -162,13 +162,22 @@ m4_define([OVSDB_CHECK_IDL_PY],
    AT_CLEANUP])
 
 m4_define([OVSDB_CHECK_IDL_REGISTER_COLUMNS_PY],
-  [AT_SETUP([$1 - Python3 - register_columns])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - register_columns])
    AT_KEYWORDS([ovsdb server idl positive Python register_columns $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
      [AT_CHECK([ovsdb-client transact unix:socket $2], [0], [ignore], [ignore])])
-   AT_CHECK([$PYTHON3 $srcdir/test-ovsdb.py  -t10 idl $srcdir/idltest.ovsschema unix:socket ?simple:b,ba,i,ia,r,ra,s,sa,u,ua?simple3:name,uset,uref?simple4:name?simple6:name,weak_ref?link1:i,k,ka,l2?link2:i,l1?singleton:name $3],
-            [0], [stdout], [ignore])
+   m4_define([REGISTER], m4_joinall([?], [],
+     [simple:b,ba,i,ia,r,ra,s,sa,u,ua],
+     [simple3:name,uset,uref],
+     [simple4:name],
+     [simple6:name,weak_ref],
+     [link1:i,k,ka,l2],
+     [link2:i,l1],
+     [indexed:i],
+     [singleton:name]))
+   AT_CHECK([$PYTHON3 $srcdir/test-ovsdb.py -t10 idl $srcdir/idltest.ovsschema \
+                unix:socket REGISTER $3], [0], [stdout], [ignore])
    AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
             [0], [$4])
    OVSDB_SERVER_SHUTDOWN
@@ -176,7 +185,7 @@ m4_define([OVSDB_CHECK_IDL_REGISTER_COLUMNS_PY],
 
 # same as OVSDB_CHECK_IDL but uses the Python IDL implementation with tcp
 m4_define([OVSDB_CHECK_IDL_TCP_PY],
-  [AT_SETUP([$1 - Python3 - tcp])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - tcp])
    AT_KEYWORDS([ovsdb server idl positive Python with tcp socket $5])
    OVSDB_START_IDLTEST(["ptcp:0:127.0.0.1"])
    PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
@@ -193,7 +202,7 @@ m4_define([OVSDB_CHECK_IDL_TCP_PY],
 # same as OVSDB_CHECK_IDL but uses the Python IDL implementation with tcp
 # with multiple remotes with only one remote reachable
 m4_define([OVSDB_CHECK_IDL_TCP_MULTIPLE_REMOTES_PY],
-  [AT_SETUP([$1 - Python3 (multiple remotes) - tcp])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 (multiple remotes) - tcp])
    AT_KEYWORDS([ovsdb server idl positive Python with tcp socket $5])
    OVSDB_START_IDLTEST(["ptcp:0:127.0.0.1"])
    PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
@@ -211,7 +220,7 @@ m4_define([OVSDB_CHECK_IDL_TCP_MULTIPLE_REMOTES_PY],
 
 # same as OVSDB_CHECK_IDL but uses the Python IDL implementation with tcp6
 m4_define([OVSDB_CHECK_IDL_TCP6_PY],
-  [AT_SETUP([$1 - Python3 - tcp6])
+  [AT_SETUP([ovsdb-idl $1 - Python3 - tcp6])
    AT_SKIP_IF([test "$IS_WIN32" = "yes"])
    AT_SKIP_IF([test $HAVE_IPV6 = no])
    AT_KEYWORDS([ovsdb server idl positive Python with tcp6 socket $5])
@@ -229,7 +238,7 @@ m4_define([OVSDB_CHECK_IDL_TCP6_PY],
    AT_CLEANUP])
 
 m4_define([OVSDB_CHECK_IDL_TCP6_MULTIPLE_REMOTES_PY],
-  [AT_SETUP([$1 - Python3 - tcp6])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - tcp6])
    AT_SKIP_IF([test "$IS_WIN32" = "yes"])
    AT_SKIP_IF([test $HAVE_IPV6 = no])
    AT_KEYWORDS([ovsdb server idl positive Python with tcp6 socket $5])
@@ -247,14 +256,14 @@ m4_define([OVSDB_CHECK_IDL_TCP6_MULTIPLE_REMOTES_PY],
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
 
-# same as OVSDB_CHECK_IDL but uses the Python IDL implementation with SSL
+# same as OVSDB_CHECK_IDL but uses the Python IDL implementation with SSL/TLS
 m4_define([OVSDB_CHECK_IDL_SSL_PY],
-  [AT_SETUP([$1 - Python3 - SSL])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - SSL/TLS])
    AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
    $PYTHON3 -c "import ssl"
    SSL_PRESENT=$?
    AT_SKIP_IF([test $SSL_PRESENT != 0])
-   AT_KEYWORDS([ovsdb server idl positive Python with ssl socket $5])
+   AT_KEYWORDS([ovsdb server idl positive Python with ssl tls socket $5])
    AT_CHECK([ovsdb-tool create db $abs_srcdir/idltest.ovsschema],
              [0], [stdout], [ignore])
    PKIDIR=$abs_top_builddir/tests
@@ -279,7 +288,7 @@ m4_define([OVSDB_CHECK_IDL_SSL_PY],
    AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
             [0], [$4])
    OVSDB_SERVER_SHUTDOWN(["
-     /unexpected SSL connection close/d
+     /unexpected SSL\/TLS connection close/d
      /Protocol error/d
    "])
    AT_CLEANUP])
@@ -299,7 +308,7 @@ m4_define([OVSDB_CHECK_IDL],
 
 # This test uses the Python IDL implementation with passive tcp
 m4_define([OVSDB_CHECK_IDL_PASSIVE_TCP_PY],
-  [AT_SETUP([$1 - Python3 - ptcp])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - ptcp])
    AT_KEYWORDS([ovsdb server idl positive Python with tcp socket $5])
    # find free TCP port
    OVSDB_START_IDLTEST(["ptcp:0:127.0.0.1"])
@@ -485,8 +494,17 @@ OVSDB_CHECK_IDL([simple idl, writing via IDL with unicode],
 003: done
 ]])
 
+OVSDB_CHECK_IDL([simple idl, inserting without modifying a column, insert_no_columns_changed],
+  [],
+  [['insert_no_columns_changed']],
+  [[000: empty
+001: commit, status=success
+002: table simple: i=0 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+003: done
+]])
+
 m4_define([OVSDB_CHECK_IDL_PY_WITH_EXPOUT],
-  [AT_SETUP([$1 - Python3])
+  [AT_SETUP([ovsdb-idl - $1 - Python3])
    AT_KEYWORDS([ovsdb server idl positive Python $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -747,6 +765,31 @@ OVSDB_CHECK_IDL([simple idl, conditional, multiple tables],
 009: done
 ]])
 
+OVSDB_CHECK_IDL([indexed idl, modification and removal],
+  [],
+  [['["idltest",
+      {"op": "insert",
+       "table": "indexed",
+       "row": {"i": 123 }}]' \
+    '["idltest",
+      {"op": "update",
+       "table": "indexed",
+       "where": [["i", "==", 123]],
+       "row": {"i": 456}}]' \
+    '["idltest",
+      {"op": "delete",
+       "table": "indexed",
+       "where": [["i", "==", 456]]}]']],
+  [[000: empty
+001: {"error":null,"result":[{"uuid":["uuid","<0>"]}]}
+002: table indexed: i=123 uuid=<0>
+003: {"error":null,"result":[{"count":1}]}
+004: table indexed: i=456 uuid=<0>
+005: {"error":null,"result":[{"count":1}]}
+006: empty
+007: done
+]])
+
 OVSDB_CHECK_IDL([self-linking idl, consistent ops],
   [],
   [['["idltest",
@@ -998,7 +1041,7 @@ OVSDB_CHECK_IDL_PY([row-from-json idl, whats this],
 003: done
 ]])
 
-AT_SETUP([idl handling of missing tables and columns - C])
+AT_SETUP([ovsdb-idl - handling of missing tables and columns - C])
 AT_KEYWORDS([ovsdb server idl positive])
 
 # idltest2.ovsschema is the same as idltest.ovsschema, except that
@@ -1076,7 +1119,7 @@ OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
 
 m4_define([OVSDB_CHECK_IDL_FETCH_COLUMNS_PY],
-  [AT_SETUP([$1 - Python3 - fetch])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - fetch])
    AT_KEYWORDS([ovsdb server idl positive Python increment fetch $6])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -1119,8 +1162,21 @@ OVSDB_CHECK_IDL_FETCH_COLUMNS([simple idl, initially populated],
 003: done
 ]])
 
+m4_define([OVSDB_CHECK_IDL_WO_MONITOR_COND_C],
+  [AT_SETUP([ovsdb-idl - $1 - C])
+   AT_KEYWORDS([ovsdb server idl monitor $4])
+   OVSDB_START_IDLTEST
+   AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/disable-monitor-cond])
+
+   AT_CHECK([test-ovsdb '-vPATTERN:console:test-ovsdb|%c|%m' -vjsonrpc -t10 idl unix:socket $2],
+            [0], [stdout], [ignore])
+   AT_CHECK([sort stdout | uuidfilt]m4_if([$5],,, [[| $5]]),
+            [0], [$3])
+   OVSDB_SERVER_SHUTDOWN
+   AT_CLEANUP])
+
 m4_define([OVSDB_CHECK_IDL_WO_MONITOR_COND_PY],
-  [AT_SETUP([$1 - Python3])
+  [AT_SETUP([ovsdb-idl - $1 - Python3])
    AT_KEYWORDS([ovsdb server idl Python monitor $4])
    OVSDB_START_IDLTEST
    AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/disable-monitor-cond])
@@ -1132,7 +1188,8 @@ m4_define([OVSDB_CHECK_IDL_WO_MONITOR_COND_PY],
    AT_CLEANUP])
 
 m4_define([OVSDB_CHECK_IDL_WO_MONITOR_COND],
-   [OVSDB_CHECK_IDL_WO_MONITOR_COND_PY($@)])
+   [OVSDB_CHECK_IDL_WO_MONITOR_COND_C($@)
+    OVSDB_CHECK_IDL_WO_MONITOR_COND_PY($@)])
 
 
 OVSDB_CHECK_IDL_WO_MONITOR_COND([simple idl disable monitor-cond],
@@ -1213,7 +1270,7 @@ OVSDB_CHECK_IDL_WO_MONITOR_COND([simple idl disable monitor-cond],
 ]])
 
 m4_define([OVSDB_CHECK_IDL_TRACK_C],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl tracking positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -1226,7 +1283,7 @@ m4_define([OVSDB_CHECK_IDL_TRACK_C],
    AT_CLEANUP])
 
 m4_define([OVSDB_CHECK_IDL_TRACK_WRITE_CHANGED_ONLY_C],
-  [AT_SETUP([$1 - write-changed-only - C])
+  [AT_SETUP([ovsdb-idl - $1 - write-changed-only - C])
    AT_KEYWORDS([ovsdb server idl tracking positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -1272,6 +1329,33 @@ OVSDB_CHECK_IDL_TRACK([track, simple idl, initially populated],
 002: table simple: i=1 r=2 b=true s=mystring u=<0> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<1> <2>] uuid=<3>
 002: table simple: updated columns: b
 003: done
+]])
+
+OVSDB_CHECK_IDL_TRACK([track, indexed idl, modification and removal],
+  [],
+  [['["idltest",
+      {"op": "insert",
+       "table": "indexed",
+       "row": {"i": 123 }}]' \
+    '["idltest",
+      {"op": "update",
+       "table": "indexed",
+       "where": [["i", "==", 123]],
+       "row": {"i": 456}}]' \
+    '["idltest",
+      {"op": "delete",
+       "table": "indexed",
+       "where": [["i", "==", 456]]}]']],
+  [[000: empty
+001: {"error":null,"result":[{"uuid":["uuid","<0>"]}]}
+002: table indexed: inserted row: i=123 uuid=<0>
+002: table indexed: updated columns: i
+003: {"error":null,"result":[{"count":1}]}
+004: table indexed: i=456 uuid=<0>
+004: table indexed: updated columns: i
+005: {"error":null,"result":[{"count":1}]}
+006: empty
+007: done
 ]])
 
 dnl This test creates database with weak references and checks that orphan
@@ -1492,6 +1576,7 @@ OVSDB_CHECK_IDL_TRACK([track, simple idl, initially populated, weak references, 
       {"op": "delete",
        "table": "simple",
        "where": [["s", "==", "row1_s"]]}]' \
+    '+sleep' \
     '["idltest",
       {"op": "insert",
        "table": "simple",
@@ -1504,16 +1589,17 @@ OVSDB_CHECK_IDL_TRACK([track, simple idl, initially populated, weak references, 
 001: table simple: updated columns: s
 002: {"error":null,"result":[{"uuid":["uuid","<3>"]},{"count":1}]}
 003: {"error":null,"result":[{"count":1}]}
-004: table simple6: name=row0_s6 weak_ref=[<0>] uuid=<1>
-004: table simple6: updated columns: weak_ref
-004: table simple: inserted/deleted row: i=0 r=0 b=false s=row1_s u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
-004: table simple: updated columns: s
-005: {"error":null,"result":[{"uuid":["uuid","<4>"]}]}
-006: table simple6: name=row0_s6 weak_ref=[<0>] uuid=<1>
-006: table simple: i=0 r=0 b=false s=row0_s u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<0>
-006: table simple: inserted row: i=0 r=0 b=false s=row2_s u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<4>
-006: table simple: updated columns: s
-007: done
+004: sleep
+005: table simple6: name=row0_s6 weak_ref=[<0>] uuid=<1>
+005: table simple6: updated columns: weak_ref
+005: table simple: inserted/deleted row: i=0 r=0 b=false s=row1_s u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
+005: table simple: updated columns: s
+006: {"error":null,"result":[{"uuid":["uuid","<4>"]}]}
+007: table simple6: name=row0_s6 weak_ref=[<0>] uuid=<1>
+007: table simple: i=0 r=0 b=false s=row0_s u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<0>
+007: table simple: inserted row: i=0 r=0 b=false s=row2_s u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<4>
+007: table simple: updated columns: s
+008: done
 ]])
 
 dnl This test checks that deleting both the destination and source of the
@@ -1687,14 +1773,16 @@ OVSDB_CHECK_IDL_TRACK([track, simple idl, initially empty, strong references, in
     '+["idltest",
       {"op": "delete",
        "table": "link2",
-       "where": [["i", "==", 2]]}]'
+       "where": [["i", "==", 2]]}]' \
+    '+sleep'
   ]],
   [[000: empty
 001: {"error":null,"result":[{"uuid":["uuid","<0>"]},{"uuid":["uuid","<1>"]}]}
 002: {"error":null,"result":[{"count":1}]}
-003: table link1: inserted row: i=1 k=1 ka=[] l2= uuid=<0>
-003: table link1: updated columns: i k
-004: done
+003: sleep
+004: table link1: inserted row: i=1 k=1 ka=[] l2= uuid=<0>
+004: table link1: updated columns: i k
+005: done
 ]])
 
 OVSDB_CHECK_IDL_TRACK([track, simple idl, initially empty, various ops],
@@ -1779,7 +1867,7 @@ OVSDB_CHECK_IDL_TRACK([track, simple idl, initially empty, various ops],
 ]])
 
 m4_define([OVSDB_CHECK_IDL_PARTIAL_UPDATE_MAP_COLUMN],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl partial update map column positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -1806,7 +1894,10 @@ OVSDB_CHECK_IDL_PARTIAL_UPDATE_MAP_COLUMN([map, simple2 idl-partial-update-map-c
 007: name=String2 smap=[[key2 : value2]] imap=[[3 : myids2]]
 008: After trying to delete a deleted element
 009: name=String2 smap=[[key2 : value2]] imap=[[3 : myids2]]
-010: End test
+010: After Create element, update smap and Delete element
+011: name=String2 smap=[[key2 : value2]] imap=[[3 : myids2]]
+012: After update smap and Delete element
+014: End test
 ]])
 
 OVSDB_CHECK_IDL_PY([partial-map idl],
@@ -1840,7 +1931,7 @@ OVSDB_CHECK_IDL_PY([partial-map update set refmap idl],
 ]])
 
 m4_define([OVSDB_CHECK_IDL_PARTIAL_UPDATE_SET_COLUMN],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl partial update set column positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -1869,7 +1960,9 @@ OVSDB_CHECK_IDL_PARTIAL_UPDATE_SET_COLUMN([set, simple3 idl-partial-update-set-c
 009: table simple3: name=String2 uset=[<0>,<1>,<4>] uref=[] uuid=<2>
 010: After add to other table + set of strong ref
 011: table simple3: name=String2 uset=[<0>,<1>,<4>] uref=[<5>] uuid=<2>
-012: End test
+012: After Create element, update set and Delete element
+013: table simple3: name=String2 uset=[<0>,<1>,<4>] uref=[<5>] uuid=<2>
+014: End test
 ]])
 
 OVSDB_CHECK_IDL_PY([partial-set idl],
@@ -1919,13 +2012,11 @@ OVSDB_CHECK_IDL_NOTIFY([simple link idl verify notify],
        "uuid-name": "l2row",
        "row": {"i": 2, "l1": ["set", [["named-uuid", "l1row"]]]}}]']],
 [[000: empty
-000: event:create, row={}, uuid=<0>, updates=None
-000: event:create, row={}, uuid=<1>, updates=None
-001: {"error":null,"result":[{"uuid":["uuid","<2>"]},{"uuid":["uuid","<3>"]}]}
-002: event:create, row={i=1 l2=[<3>]}, uuid=<2>, updates=None
-002: event:create, row={i=2 l1=[<2>]}, uuid=<3>, updates=None
-002: table link1: i=1 k=1 ka=[] l2=2 uuid=<2>
-002: table link2: i=2 l1=1 uuid=<3>
+001: {"error":null,"result":[{"uuid":["uuid","<0>"]},{"uuid":["uuid","<1>"]}]}
+002: event:create, row={i=1 l2=[<1>]}, uuid=<0>, updates=None
+002: event:create, row={i=2 l1=[<0>]}, uuid=<1>, updates=None
+002: table link1: i=1 k=1 ka=[] l2=2 uuid=<0>
+002: table link2: i=2 l1=1 uuid=<1>
 003: done
 ]])
 
@@ -1981,45 +2072,69 @@ OVSDB_CHECK_IDL_NOTIFY([simple idl verify notify],
        "where": [["i", "==", 0]]}]' \
     'reconnect']],
   [[000: empty
-000: event:create, row={}, uuid=<0>, updates=None
-000: event:create, row={}, uuid=<1>, updates=None
-001: {"error":null,"result":[{"uuid":["uuid","<2>"]},{"uuid":["uuid","<3>"]}]}
-002: event:create, row={i=0 r=0 b=false s= u=<4> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<3>, updates=None
-002: event:create, row={i=1 r=2 b=true s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>]}, uuid=<2>, updates=None
-002: table simple: i=0 r=0 b=false s= u=<4> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
-002: table simple: i=1 r=2 b=true s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
+001: {"error":null,"result":[{"uuid":["uuid","<0>"]},{"uuid":["uuid","<1>"]}]}
+002: event:create, row={i=0 r=0 b=false s= u=<2> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<1>, updates=None
+002: event:create, row={i=1 r=2 b=true s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>]}, uuid=<0>, updates=None
+002: table simple: i=0 r=0 b=false s= u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+002: table simple: i=1 r=2 b=true s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 003: {"error":null,"result":[{"count":2}]}
-004: event:update, row={i=1 r=2 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>]}, uuid=<2>, updates={b=true}
-004: table simple: i=0 r=0 b=false s= u=<4> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
-004: table simple: i=1 r=2 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
+004: event:update, row={i=1 r=2 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>]}, uuid=<0>, updates={b=true}
+004: table simple: i=0 r=0 b=false s= u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+004: table simple: i=1 r=2 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 005: {"error":null,"result":[{"count":2}]}
-006: event:update, row={i=0 r=123.5 b=false s= u=<4> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<3>, updates={r=0}
-006: event:update, row={i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>]}, uuid=<2>, updates={r=2}
-006: table simple: i=0 r=123.5 b=false s= u=<4> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
-006: table simple: i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
-007: {"error":null,"result":[{"uuid":["uuid","<8>"]}]}
-008: event:create, row={i=-1 r=125 b=false s= u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[]}, uuid=<8>, updates=None
-008: table simple: i=-1 r=125 b=false s= u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<8>
-008: table simple: i=0 r=123.5 b=false s= u=<4> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
-008: table simple: i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
+006: event:update, row={i=0 r=123.5 b=false s= u=<2> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<1>, updates={r=0}
+006: event:update, row={i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>]}, uuid=<0>, updates={r=2}
+006: table simple: i=0 r=123.5 b=false s= u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+006: table simple: i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
+007: {"error":null,"result":[{"uuid":["uuid","<6>"]}]}
+008: event:create, row={i=-1 r=125 b=false s= u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[]}, uuid=<6>, updates=None
+008: table simple: i=-1 r=125 b=false s= u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<6>
+008: table simple: i=0 r=123.5 b=false s= u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+008: table simple: i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 009: {"error":null,"result":[{"count":2}]}
-010: event:update, row={i=-1 r=125 b=false s=newstring u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[]}, uuid=<8>, updates={s=}
-010: event:update, row={i=0 r=123.5 b=false s=newstring u=<4> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<3>, updates={s=}
-010: table simple: i=-1 r=125 b=false s=newstring u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<8>
-010: table simple: i=0 r=123.5 b=false s=newstring u=<4> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
-010: table simple: i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
+010: event:update, row={i=-1 r=125 b=false s=newstring u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[]}, uuid=<6>, updates={s=}
+010: event:update, row={i=0 r=123.5 b=false s=newstring u=<2> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<1>, updates={s=}
+010: table simple: i=-1 r=125 b=false s=newstring u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<6>
+010: table simple: i=0 r=123.5 b=false s=newstring u=<2> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+010: table simple: i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 011: {"error":null,"result":[{"count":1}]}
-012: event:delete, row={i=0 r=123.5 b=false s=newstring u=<4> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<3>, updates=None
-012: table simple: i=-1 r=125 b=false s=newstring u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<8>
-012: table simple: i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
+012: event:delete, row={i=0 r=123.5 b=false s=newstring u=<2> ia=[] ra=[] ba=[] sa=[] ua=[]}, uuid=<1>, updates=None
+012: table simple: i=-1 r=125 b=false s=newstring u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<6>
+012: table simple: i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 013: reconnect
-014: event:create, row={i=-1 r=125 b=false s=newstring u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[]}, uuid=<8>, updates=None
-014: event:create, row={i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>]}, uuid=<2>, updates=None
-014: event:create, row={}, uuid=<0>, updates=None
-014: event:create, row={}, uuid=<1>, updates=None
-014: table simple: i=-1 r=125 b=false s=newstring u=<4> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<8>
-014: table simple: i=1 r=123.5 b=false s=mystring u=<5> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<6> <7>] uuid=<2>
+014: event:create, row={i=-1 r=125 b=false s=newstring u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[]}, uuid=<6>, updates=None
+014: event:create, row={i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>]}, uuid=<0>, updates=None
+014: table simple: i=-1 r=125 b=false s=newstring u=<2> ia=[1] ra=[1.5] ba=[false] sa=[] ua=[] uuid=<6>
+014: table simple: i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 015: done
+]])
+
+OVSDB_CHECK_IDL_NOTIFY([indexed idl, modification and removal notify],
+  [['track-notify' \
+    '["idltest",
+      {"op": "insert",
+       "table": "indexed",
+       "row": {"i": 123 }}]' \
+    '["idltest",
+      {"op": "update",
+       "table": "indexed",
+       "where": [["i", "==", 123]],
+       "row": {"i": 456}}]' \
+    '["idltest",
+      {"op": "delete",
+       "table": "indexed",
+       "where": [["i", "==", 456]]}]']],
+  [[000: empty
+001: {"error":null,"result":[{"uuid":["uuid","<0>"]}]}
+002: event:create, row={i=123}, uuid=<0>, updates=None
+002: table indexed: i=123 uuid=<0>
+003: {"error":null,"result":[{"count":1}]}
+004: event:update, row={i=456}, uuid=<0>, updates={i=123}
+004: table indexed: i=456 uuid=<0>
+005: {"error":null,"result":[{"count":1}]}
+006: empty
+006: event:delete, row={i=456}, uuid=<0>, updates=None
+007: done
 ]])
 
 # Tests to verify the functionality of the one column compound index.
@@ -2029,7 +2144,7 @@ OVSDB_CHECK_IDL_NOTIFY([simple idl verify notify],
 # Then, some at_checks are used to verify the correctness of the corresponding index as well as the existence
 # of all the rows involved in the test.
 m4_define([OVSDB_CHECK_IDL_COMPOUND_INDEX_SINGLE_COLUMN_C],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl compound_index_single_column compound_index positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -2176,7 +2291,7 @@ OVSDB_CHECK_IDL_COMPOUND_INDEX_SINGLE_COLUMN_C([Compound_index, single column te
 # Then, some at_checks are used to verify the correctness of the corresponding index as well as the existence
 # of all the rows involved in the test.
 m4_define([OVSDB_CHECK_IDL_COMPOUND_INDEX_DOUBLE_COLUMN_C],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl compound_index_double_column compound_index positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -2315,7 +2430,7 @@ OVSDB_CHECK_IDL_COMPOUND_INDEX_DOUBLE_COLUMN_C([Compound_index, double column te
 ])
 
 m4_define([OVSDB_CHECK_IDL_COMPOUND_INDEX_WITH_REF],
-  [AT_SETUP([$1 - C])
+  [AT_SETUP([ovsdb-idl - $1 - C])
    AT_KEYWORDS([ovsdb server idl compound_index compound_index_with_ref positive $5])
    OVSDB_START_IDLTEST
    m4_if([$2], [], [],
@@ -2341,7 +2456,7 @@ OVSDB_CHECK_IDL_COMPOUND_INDEX_WITH_REF([set, simple3 idl-compound-index-with-re
 ]])
 
 m4_define([CHECK_STREAM_OPEN_BLOCK],
-  [AT_SETUP([Check stream open block - $1 - $3])
+  [AT_SETUP([ovsdb-idl - Check stream open block - $1 - $3])
    AT_SKIP_IF([test "$3" = "tcp6" && test "$IS_WIN32" = "yes"])
    AT_SKIP_IF([test "$3" = "tcp6" && test "$HAVE_IPV6" = "no"])
    AT_SKIP_IF([test "$3" = "ssl6" && test "$IS_WIN32" = "yes"])
@@ -2363,7 +2478,7 @@ m4_define([CHECK_STREAM_OPEN_BLOCK],
    AT_CHECK([$2 PROTOCOL:$4:$WRONG_PORT $SSL_KEY_ARGS], [1], [ignore],
             [ignore])
    OVSDB_SERVER_SHUTDOWN(["
-     /unexpected SSL connection close/d
+     /unexpected SSL\/TLS connection close/d
      /Protocol error/d
    "])
    AT_CHECK([$2 PROTOCOL:$4:$TCP_PORT $SSL_KEY_ARGS], [1], [ignore], [ignore])
@@ -2402,7 +2517,7 @@ m4_define([OVSDB_CLUSTER_CHECK_MONITOR_COND_SINCE_TXN_IDS],
 # same as OVSDB_CHECK_IDL but uses Python IDL implementation with tcp
 # with multiple remotes to assert the idl connects to the leader of the Raft cluster
 m4_define([OVSDB_CHECK_IDL_LEADER_ONLY_PY],
-  [AT_SETUP([$1 - Python3 (leader only)])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 (leader only)])
    AT_SKIP_IF([test "$IS_ARM64" = "yes"])
    AT_KEYWORDS([ovsdb server idl Python leader_only with tcp socket])
    m4_define([LPBK],[127.0.0.1])
@@ -2445,7 +2560,7 @@ OVSDB_CHECK_IDL_LEADER_ONLY_PY([Check Python IDL reconnects to leader], 3, ['rem
 # If LOG_FILTER is provided, checks that the contents of LOG_FILTER
 # are not matched by grep in the test-ovsdb logs.
 m4_define([OVSDB_CHECK_CLUSTER_IDL_C],
-  [AT_SETUP([$1 - C - tcp])
+  [AT_SETUP([ovsdb-idl - $1 - C - tcp])
    AT_KEYWORDS([ovsdb server idl tcp $6])
    m4_define([LPBK],[127.0.0.1])
    OVSDB_CLUSTER_START_IDLTEST([$2], ["ptcp:0:"LPBK])
@@ -2466,7 +2581,7 @@ m4_define([OVSDB_CHECK_CLUSTER_IDL_C],
 
 # Same as OVSDB_CHECK_CLUSTER_IDL_C but uses the Python IDL implementation.
 m4_define([OVSDB_CHECK_CLUSTER_IDL_PY],
-  [AT_SETUP([$1 - Python3 - tcp])
+  [AT_SETUP([ovsdb-idl - $1 - Python3 - tcp])
    AT_KEYWORDS([ovsdb server idl tcp $6])
    m4_define([LPBK],[127.0.0.1])
    OVSDB_CLUSTER_START_IDLTEST([$2], ["ptcp:0:"LPBK])
@@ -2593,17 +2708,17 @@ unix:socket remote doesn't have table link2
 unix:socket remote doesn't have table simple5
 unix:socket remote doesn't have col irefmap in table simple5
 unix:socket remote doesn't have col l2 in table link1
-unix:socket remote has col i in table link1
+unix:socket remote has col i in table link1, type: integer
 unix:socket remote doesn't have col id in table simple7
 --- remote unix:socket done ---
 unix:socket2 remote has table simple
 unix:socket2 remote has table link1
 unix:socket2 remote has table link2
 unix:socket2 remote has table simple5
-unix:socket2 remote has col irefmap in table simple5
-unix:socket2 remote has col l2 in table link1
-unix:socket2 remote has col i in table link1
-unix:socket2 remote has col id in table simple7
+unix:socket2 remote has col irefmap in table simple5, type: map of (integer, uuid) pairs
+unix:socket2 remote has col l2 in table link1, type: set of up to 1 uuids
+unix:socket2 remote has col i in table link1, type: integer
+unix:socket2 remote has col id in table simple7, type: string
 --- remote unix:socket2 done ---
 ], [stderr])
 
@@ -2636,6 +2751,7 @@ OVSDB_CHECK_IDL_TRACK([track, insert and delete, refs to link1],
        "table": "link2",
        "where": [["i", "==", 2]]}
        ]' \
+    '+sleep' \
     '["idltest",
       {"op": "delete",
        "table": "link2",
@@ -2645,15 +2761,16 @@ OVSDB_CHECK_IDL_TRACK([track, insert and delete, refs to link1],
   [[000: empty
 001: {"error":null,"result":[{"uuid":["uuid","<0>"]},{"uuid":["uuid","<1>"]},{"uuid":["uuid","<2>"]}]}
 002: {"error":null,"result":[{"count":1}]}
-003: table link1: inserted row: i=1 k=1 ka=[] l2= uuid=<1>
-003: table link1: updated columns: i k
-003: table link2: inserted row: i=1 l1=1 uuid=<0>
-003: table link2: inserted/deleted row: i=2 l1=1 uuid=<2>
-003: table link2: updated columns: i l1
-003: table link2: updated columns: i l1
-004: {"error":null,"result":[{"count":1}]}
-005: table link1: i=1 k=1 ka=[] l2= uuid=<1>
-006: done
+003: sleep
+004: table link1: inserted row: i=1 k=1 ka=[] l2= uuid=<1>
+004: table link1: updated columns: i k
+004: table link2: inserted row: i=1 l1=1 uuid=<0>
+004: table link2: inserted/deleted row: i=2 l1=1 uuid=<2>
+004: table link2: updated columns: i l1
+004: table link2: updated columns: i l1
+005: {"error":null,"result":[{"count":1}]}
+006: table link1: i=1 k=1 ka=[] l2= uuid=<1>
+007: done
 ]])
 OVSDB_CHECK_IDL_TRACK([track, insert and delete, refs to link2],
   [],
@@ -2679,6 +2796,7 @@ OVSDB_CHECK_IDL_TRACK([track, insert and delete, refs to link2],
        "table": "link1",
        "where": [["i", "==", 2]]}
        ]' \
+    '+sleep' \
     '["idltest",
       {"op": "delete",
        "table": "link1",
@@ -2688,38 +2806,39 @@ OVSDB_CHECK_IDL_TRACK([track, insert and delete, refs to link2],
   [[000: empty
 001: {"error":null,"result":[{"uuid":["uuid","<0>"]},{"uuid":["uuid","<1>"]},{"uuid":["uuid","<2>"]}]}
 002: {"error":null,"result":[{"count":1}]}
-003: table link1: inserted row: i=1 k=1 ka=[] l2=1 uuid=<0>
-003: table link1: inserted/deleted row: i=2 k=1 ka=[] l2=1 uuid=<2>
-003: table link1: updated columns: i k l2
-003: table link1: updated columns: i k l2
-003: table link2: inserted row: i=1 l1= uuid=<1>
-003: table link2: updated columns: i
-004: {"error":null,"result":[{"count":1}]}
-005: table link2: i=1 l1= uuid=<1>
-006: done
+003: sleep
+004: table link1: inserted row: i=1 k=1 ka=[] l2=1 uuid=<0>
+004: table link1: inserted/deleted row: i=2 k=1 ka=[] l2=1 uuid=<2>
+004: table link1: updated columns: i k l2
+004: table link1: updated columns: i k l2
+004: table link2: inserted row: i=1 l1= uuid=<1>
+004: table link2: updated columns: i
+005: {"error":null,"result":[{"count":1}]}
+006: table link2: i=1 l1= uuid=<1>
+007: done
 ]])
 
 m4_define([OVSDB_CHECK_IDL_PERS_UUID_INSERT_C],
-  [AT_SETUP([$1 - C])
-   AT_KEYWORDS([idl persistent uuid insert])
+  [AT_SETUP([ovsdb-idl - $1 - C])
+   AT_KEYWORDS([ovsdb server idl persistent uuid insert])
    OVSDB_START_IDLTEST([], ["$abs_srcdir/idltest.ovsschema"])
    AT_CHECK([test-ovsdb '-vPATTERN:console:test-ovsdb|%c|%m' -vjsonrpc -t10 idl unix:socket $2],
             [0], [stdout], [stderr])
    AT_CHECK([sort stdout],
             [0], [$3])
-   AT_CHECK([grep $4 stderr], [0], [ignore])
+   m4_if([$4], [], [], [AT_CHECK([grep $4 stderr], [0], [ignore])])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
 
 m4_define([OVSDB_CHECK_IDL_PERS_UUID_INSERT_PY],
-  [AT_SETUP([$1 - Python3])
-   AT_KEYWORDS([idl persistent uuid insert])
+  [AT_SETUP([ovsdb-idl - $1 - Python3])
+   AT_KEYWORDS([ovsdb server idl python persistent uuid insert])
    OVSDB_START_IDLTEST([], ["$abs_srcdir/idltest.ovsschema"])
    AT_CHECK([$PYTHON3 $srcdir/test-ovsdb.py  -t10 idl $srcdir/idltest.ovsschema unix:socket $2],
             [0], [stdout], [stderr])
    AT_CHECK([sort stdout],
             [0], [$3])
-   AT_CHECK([grep $4 stderr], [0], [ignore])
+   m4_if([$4], [], [], [AT_CHECK([grep $4 stderr], [0], [ignore])])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
 
@@ -2757,9 +2876,44 @@ OVSDB_CHECK_IDL_PERS_UUID_INSERT([simple idl, persistent uuid insert],
 ]],
   [['This UUID would duplicate a UUID already present within the table or deleted within the same transaction']])
 
+OVSDB_CHECK_IDL_PERS_UUID_INSERT([simple idl, persistent uuid insert uref],
+  [['insert_uuid_uref d7f2845f-2e8d-46a9-8330-f6d0b7d2ca36 689420a0-515b-4c0f-8eba-7ad59a344b54']],
+  [[000: empty
+001: commit, status=success
+002: table simple3: name= uset=[] uref=[689420a0-515b-4c0f-8eba-7ad59a344b54] uuid=d7f2845f-2e8d-46a9-8330-f6d0b7d2ca36
+002: table simple4: name= uuid=689420a0-515b-4c0f-8eba-7ad59a344b54
+003: done
+]])
+
+OVSDB_CHECK_IDL_PY([simple idl, python, add_op],
+  [],
+  [['insert 1, insert 2, insert 3, insert 1' \
+    'add_op {"op": "delete", "table": "simple", "where": [["i", "==", 1]]}' \
+    'add_op {"op": "insert", "table": "simple", "row": {"i": 2}}, delete 3' \
+    'insert 2, add_op {"op": "update", "table": "simple", "row": {"i": 1}, "where": [["i", "==", 2]]}'
+  ]],
+  [[000: empty
+001: commit, status=success
+002: table simple: i=1 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<1>
+002: table simple: i=1 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<2>
+002: table simple: i=2 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
+002: table simple: i=3 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<4>
+003: commit, status=success
+004: table simple: i=2 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
+004: table simple: i=3 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<4>
+005: commit, status=success
+006: table simple: i=2 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
+006: table simple: i=2 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<5>
+007: commit, status=success
+008: table simple: i=1 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<3>
+008: table simple: i=1 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<5>
+008: table simple: i=1 r=0 b=false s= u=<0> ia=[] ra=[] ba=[] sa=[] ua=[] uuid=<6>
+009: done
+]],[],sort)
+
 
 m4_define([OVSDB_CHECK_IDL_CHANGE_AWARE],
-  [AT_SETUP([simple idl, database change aware, online conversion - $1])
+  [AT_SETUP([ovsdb-idl - simple idl, database change aware, online conversion - $1])
    AT_KEYWORDS([ovsdb server idl db_change_aware conversion $1])
 
    m4_if([$1], [clustered],

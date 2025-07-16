@@ -28,6 +28,7 @@
 #    - ovs_dump_dp_provider
 #    - ovs_dump_netdev
 #    - ovs_dump_netdev_provider
+#    - ovs_dump_nla <struct nlattr *> <len> {dump} {enum type}
 #    - ovs_dump_ovs_list <struct ovs_list *> {[<structure>] [<member>] {dump}]}
 #    - ovs_dump_packets <struct dp_packet_batch|dp_packet> [tcpdump options]
 #    - ovs_dump_cmap <struct cmap *> {[<structure>] [<member>] {dump}]}
@@ -37,6 +38,7 @@
 #    - ovs_dump_udpif_keys {<udpif_name>|<udpif_address>} {short}
 #    - ovs_show_fdb {[<bridge_name>] {dbg} {hash}}
 #    - ovs_show_upcall {dbg}
+#    - ovs_dump_conntrack_conns <struct conntrack *> {short}
 #
 #  Example:
 #    $ gdb $(which ovs-vswitchd) $(pidof ovs-vswitchd)
@@ -1551,6 +1553,134 @@ class CmdDumpPackets(gdb.Command):
 
 
 #
+# Implements the GDB "ovs_dump_conntrack_conns" command
+#
+class CmdDumpDpConntrackConn(gdb.Command):
+    """Dump all connections in a conntrack set
+    Usage:
+      ovs_dump_conntrack_conns <struct conntrack *> {short}
+
+      <struct conntrack *> : Pointer to conntrack
+      short                : Only dump conn structure addresses,
+                             no content details
+
+    Example dumping all <struct conn> connections:
+
+    (gdb) ovs_dump_conntrack_conns 0x5606339c25e0
+    (struct conn *) 0x7f32c000a8c0: expiration = ... nw_proto = 1
+    (struct conn *) 0x7f32c00489d0: expiration = ... nw_proto = 6
+    (struct conn *) 0x7f32c0153bb0: expiration = ... nw_proto = 17
+
+    (gdb) ovs_dump_conntrack_conns 0x5606339c25e0 short
+    (struct conn *) 0x7f32c000a8c0
+    (struct conn *) 0x7f32c00489d0
+    (struct conn *) 0x7f32c0153bb0
+    """
+    def __init__(self):
+        super(CmdDumpDpConntrackConn, self).__init__(
+            "ovs_dump_conntrack_conns",
+            gdb.COMMAND_DATA)
+
+    @staticmethod
+    def display_single_conn(conn, dir_, indent=0, short=False):
+        indent = " " * indent
+        if short:
+            print("{}(struct conn *) {}".format(indent, conn))
+        else:
+            print("{}(struct conn *) {}: expiration = {}, mark = {}, "
+                  "dl_type = {}, zone = {}, nw_proto = {}".format(
+                      indent, conn, conn['expiration'],
+                      conn['mark'], conn['key_node'][dir_]['key']['dl_type'],
+                      conn['key_node'][dir_]['key']['zone'],
+                      conn['key_node'][dir_]['key']['nw_proto']))
+
+    def invoke(self, arg, from_tty):
+        arg_list = gdb.string_to_argv(arg)
+        if len(arg_list) not in (1, 2) or \
+           (len(arg_list) == 2 and arg_list[1] != "short"):
+            print("usage: ovs_dump_conntrack_conns <struct conntrack *> "
+                  "{short}")
+            return
+
+        ct = gdb.parse_and_eval(arg_list[0]).cast(
+            gdb.lookup_type('struct conntrack').pointer())
+
+        for key_node in ForEachCMAP(ct["conns"],
+                                    "struct conn_key_node", "cm_node"):
+            node = container_of(
+                key_node,
+                gdb.lookup_type('struct conn').pointer(),
+                "key_node")
+            self.display_single_conn(node, key_node['dir'],
+                                     short="short" in arg_list[1:])
+
+
+#
+# Implements the GDB "ovs_dump_nla" command
+#
+class CmdDumpNla(gdb.Command):
+    """Dump all Netlink attributes.
+    Usage:
+      ovs_dump_nla <struct nlattr *> <len> {dump} {enum type}
+
+    This is an example dumping some actions:
+
+    (gdb) ovs_dump_nla 0x7f10e35d88b4 80 ovs_action_attr
+    (struct nlattr *) 0x7f10e35d88b4:[OVS_ACTION_ATTR_METER] {nla_len = 8, ...
+    (struct nlattr *) 0x7f10e35d88bc:[OVS_ACTION_ATTR_SET] {nla_len = 20, ...
+    (struct nlattr *) 0x7f10e35d88d0:[OVS_ACTION_ATTR_SET] {nla_len = 32, ...
+    (struct nlattr *) 0x7f10e35d88f0:[OVS_ACTION_ATTR_PUSH_VLAN] {nla_len ...
+    (struct nlattr *) 0x7f10e35d88f8:[OVS_ACTION_ATTR_OUTPUT] {nla_len = 8, ...
+    """
+    def __init__(self):
+        super(CmdDumpNla, self).__init__("ovs_dump_nla",
+                                         gdb.COMMAND_DATA)
+
+    def invoke(self, arg, from_tty):
+        attr_size = gdb.lookup_type("struct nlattr").sizeof
+        arg_list = gdb.string_to_argv(arg)
+        dump = False
+        enum = None
+
+        if len(arg_list) not in (2, 3, 4):
+            print("ERROR: Invalid arguments!\n")
+            print(self.__doc__)
+            return
+
+        if len(arg_list) >= 3:
+            for i in range(2, len(arg_list)):
+                if arg_list[i] == "dump":
+                    dump = True
+                else:
+                    enum = arg_list[i]
+
+        nla = gdb.parse_and_eval(arg_list[0]).cast(
+            gdb.lookup_type('struct nlattr').pointer())
+
+        length = gdb.parse_and_eval(arg_list[1])
+
+        for attr in ForEachNL(nla, length):
+            if enum is not None:
+                hdr = "[{}] {}, nl_attr_get() = {}". \
+                    format(attr['nla_type'].cast(
+                        gdb.lookup_type('enum ' + arg_list[2])),
+                          attr.dereference(), attr + 1)
+            else:
+                hdr = " {}, nl_attr_get() = {}".format(attr.dereference(),
+                                                      attr + 1)
+
+            if dump:
+                mem = gdb.selected_inferior().read_memory(attr + 1,
+                                                          attr['nla_len']
+                                                          - attr_size)
+                dump = ": " + " ".join('{:02x}'.format(b) for b in bytes(mem))
+            else:
+                dump = ""
+
+            print("(struct nlattr *) {}:{}{}".format(attr, hdr, dump))
+
+
+#
 # Initialize all GDB commands
 #
 CmdDumpBridge()
@@ -1561,6 +1691,7 @@ CmdDumpDpNetdevPorts()
 CmdDumpDpProvider()
 CmdDumpNetdev()
 CmdDumpNetdevProvider()
+CmdDumpNla()
 CmdDumpOfpacts()
 CmdDumpOvsList()
 CmdDumpPackets()
@@ -1571,3 +1702,4 @@ CmdDumpSmap()
 CmdDumpUdpifKeys()
 CmdShowFDB()
 CmdShowUpcall()
+CmdDumpDpConntrackConn()

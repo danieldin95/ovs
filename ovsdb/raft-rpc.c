@@ -153,11 +153,13 @@ raft_append_request_from_jsonrpc(struct ovsdb_parser *p,
     if (!log) {
         return;
     }
-    const struct json_array *entries = json_array(log);
-    rq->entries = xmalloc(entries->n * sizeof *rq->entries);
+
+    size_t n = json_array_size(log);
+
+    rq->entries = xmalloc(n * sizeof *rq->entries);
     rq->n_entries = 0;
-    for (size_t i = 0; i < entries->n; i++) {
-        struct ovsdb_error *error = raft_entry_from_json(entries->elems[i],
+    for (size_t i = 0; i < n; i++) {
+        struct ovsdb_error *error = raft_entry_from_json(json_array_at(log, i),
                                                          &rq->entries[i]);
         if (error) {
             ovsdb_parser_put_error(p, error);
@@ -333,7 +335,7 @@ raft_vote_reply_to_jsonrpc(const struct raft_vote_reply *rpy,
                            struct json *args)
 {
     raft_put_uint64(args, "term", rpy->term);
-    json_object_put_format(args, "vote", UUID_FMT, UUID_ARGS(&rpy->vote));
+    json_object_put_uuid(args, "vote", &rpy->vote);
     if (rpy->is_prevote) {
         json_object_put(args, "is_prevote", json_boolean_create(true));
     }
@@ -476,8 +478,7 @@ raft_remove_server_reply_to_jsonrpc(const struct raft_remove_server_reply *rpy,
                                     struct json *args)
 {
     if (!uuid_is_zero(&rpy->target_sid)) {
-        json_object_put_format(args, "target_server",
-                               UUID_FMT, UUID_ARGS(&rpy->target_sid));
+        json_object_put_uuid(args, "target_server", &rpy->target_sid);
     }
     json_object_put(args, "success", json_boolean_create(rpy->success));
 }
@@ -524,8 +525,7 @@ raft_install_snapshot_request_to_jsonrpc(
     raft_put_uint64(args, "last_index", rq->last_index);
     raft_put_uint64(args, "last_term", rq->last_term);
     json_object_put(args, "last_servers", json_clone(rq->last_servers));
-    json_object_put_format(args, "last_eid",
-                           UUID_FMT, UUID_ARGS(&rq->last_eid));
+    json_object_put_uuid(args, "last_eid", &rq->last_eid);
     raft_put_uint64(args, "election_timer", rq->election_timer);
 
     json_object_put(args, "data", json_clone(rq->data));
@@ -636,7 +636,7 @@ static void
 raft_remove_server_request_to_jsonrpc(
     const struct raft_remove_server_request *rq, struct json *args)
 {
-    json_object_put_format(args, "server_id", UUID_FMT, UUID_ARGS(&rq->sid));
+    json_object_put_uuid(args, "server_id", &rq->sid);
 }
 
 static void
@@ -708,8 +708,8 @@ raft_execute_command_request_to_jsonrpc(
     const struct raft_execute_command_request *rq, struct json *args)
 {
     json_object_put(args, "data", json_clone(rq->data));
-    json_object_put_format(args, "prereq", UUID_FMT, UUID_ARGS(&rq->prereq));
-    json_object_put_format(args, "result", UUID_FMT, UUID_ARGS(&rq->result));
+    json_object_put_uuid(args, "prereq", &rq->prereq);
+    json_object_put_uuid(args, "result", &rq->result);
 }
 
 static void
@@ -751,7 +751,7 @@ static void
 raft_execute_command_reply_to_jsonrpc(
     const struct raft_execute_command_reply *rpy, struct json *args)
 {
-    json_object_put_format(args, "result", UUID_FMT, UUID_ARGS(&rpy->result));
+    json_object_put_uuid(args, "result", &rpy->result);
     json_object_put_string(args, "status",
                            raft_command_status_to_string(rpy->status));
     if (rpy->commit_index) {
@@ -833,13 +833,12 @@ raft_rpc_to_jsonrpc(const struct uuid *cid,
 {
     struct json *args = json_object_create();
     if (!uuid_is_zero(cid)) {
-        json_object_put_format(args, "cluster", UUID_FMT, UUID_ARGS(cid));
+        json_object_put_uuid(args, "cluster", cid);
     }
     if (!uuid_is_zero(&rpc->common.sid)) {
-        json_object_put_format(args, "to", UUID_FMT,
-                               UUID_ARGS(&rpc->common.sid));
+        json_object_put_uuid(args, "to", &rpc->common.sid);
     }
-    json_object_put_format(args, "from", UUID_FMT, UUID_ARGS(sid));
+    json_object_put_uuid(args, "from", sid);
     if (rpc->common.comment) {
         json_object_put_string(args, "comment", rpc->common.comment);
     }
@@ -881,14 +880,14 @@ raft_rpc_from_jsonrpc(struct uuid *cidp, const struct uuid *sid,
         return ovsdb_error(NULL, "unknown method %s", msg->method);
     }
 
-    if (json_array(msg->params)->n != 1) {
+    if (json_array_size(msg->params) != 1) {
         return ovsdb_error(NULL,
                            "%s RPC has %"PRIuSIZE" parameters (expected 1)",
-                           msg->method, json_array(msg->params)->n);
+                           msg->method, json_array_size(msg->params));
     }
 
     struct ovsdb_parser p;
-    ovsdb_parser_init(&p, json_array(msg->params)->elems[0],
+    ovsdb_parser_init(&p, json_array_at(msg->params, 0),
                       "raft %s RPC", msg->method);
 
     bool is_hello = rpc->type == RAFT_RPC_HELLO_REQUEST;

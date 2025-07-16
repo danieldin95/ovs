@@ -564,18 +564,6 @@ ffffffffffffaa55aa55000008060001080006040001aa55aa550000ac1f0101000000000000ac1f
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
-AT_SETUP([tunnel - LISP])
-OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=lisp \
-                    options:remote_ip=1.1.1.1 ofport_request=1])
-
-AT_CHECK([ovs-appctl dpif/show | tail -n +3], [0], [dnl
-    br0 65534/100: (dummy-internal)
-    p1 1/4341: (lisp: remote_ip=1.1.1.1)
-])
-
-OVS_VSWITCHD_STOP
-AT_CLEANUP
-
 AT_SETUP([tunnel - ERSPAN])
 OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=erspan \
                     options:remote_ip=1.1.1.1 options:key=1 options:erspan_ver=1 \
@@ -1038,7 +1026,7 @@ AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
 
 AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'tunnel(tun_id=0,src=1.1.1.1,dst=1.1.1.2,ttl=64),in_port(4789)'], [0], [stdout])
 AT_CHECK([tail -1 stdout], [0],
-  [Datapath actions: set(tunnel(ipv6_dst=2001:cafe::1,ttl=64,tp_dst=4789,flags(df))),4789
+  [Datapath actions: set(tunnel(ipv6_dst=2001:cafe::1,ttl=64,tp_dst=4789,flags(df|csum))),4789
 ])
 
 AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'tunnel(tun_id=0x0,ipv6_src=2001:cafe::1,ipv6_dst=2001:cafe::2,ttl=64),in_port(4789)'], [0], [stdout])
@@ -1053,9 +1041,15 @@ AT_SETUP([tunnel - concomitant incompatible tunnels on the same port])
 OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=vxlan \
                     options:remote_ip=flow ofport_request=1])
 
+if test "$IS_WIN32" = "yes"; then
 AT_CHECK([ovs-vsctl add-port br0 p2 -- set Interface p2 type=vxlan \
-                    options:remote_ip=flow options:exts=gbp options:key=1 ofport_request=2], [0],
+                    options:remote_ip=flow options:exts=gbp options:key=1 ofport_request=2], [160],
   [], [ignore])
+else
+AT_CHECK([ovs-vsctl add-port br0 p2 -- set Interface p2 type=vxlan \
+                    options:remote_ip=flow options:exts=gbp options:key=1 ofport_request=2], [65],
+  [], [ignore])
+fi
 
 AT_CHECK([grep 'p2: could not set configuration (File exists)' ovs-vswitchd.log | sed "s/^.*\(p2:.*\)$/\1/"], [0],
   [p2: could not set configuration (File exists)
@@ -1264,6 +1258,18 @@ OVS_VSWITCHD_START(
 AT_CHECK([ovs-vsctl set int p1 type=gre options:remote_ip=127.0.0.1])
 AT_CHECK([ovs-vsctl del-port p1])
 AT_CHECK([ovs-vsctl add-port br0 p1 -- set int p1 type=dummy])
+
+OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])]
+AT_CLEANUP
+
+AT_SETUP([tunnel - re-create port with different name])
+OVS_VSWITCHD_START(
+  [add-port br0 p0 -- set int p0 type=vxlan options:remote_ip=10.10.10.1])
+
+AT_CHECK([ovs-vsctl --if-exists del-port p0 -- \
+          add-port br0 p1 -- \
+          set int p1 type=vxlan options:remote_ip=10.10.10.1])
 
 OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])]

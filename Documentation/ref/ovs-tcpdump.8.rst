@@ -55,14 +55,23 @@ Options
 * ``--mirror-to``
 
   The name of the interface which should be the destination of the mirrored
-  packets. The default is ``mi<port>``.
+  packets. If the specified interface does not exist, it will be created as
+  part of the setup process. If the interface already exists, it must be a
+  port type that can be used with the ``tcpdump`` utility.  Mirror ports
+  cannot be used for normal traffic. The default value is ``mi<port>``.
 
 * ``--span``
 
   If specified, mirror all ports (optional).
 
+* ``--filter <flow>``
+
+  If specified, only mirror packets that match the provided OpenFlow filter.
+  The available fields are documented in ``ovs-fields(7)``.
+
 See Also
 ========
 
 ``ovs-appctl(8)``, ``ovs-vswitchd(8)``, ``ovs-pcap(1)``,
-``ovs-tcpundump(1)``, ``tcpdump(8)``, ``wireshark(8)``.
+``ovs-fields(7)``, ``ovs-tcpundump(1)``, ``tcpdump(8)``,
+``wireshark(8)``.

@@ -35,9 +35,9 @@ ROW_CREATE = "create"
 ROW_UPDATE = "update"
 ROW_DELETE = "delete"
 
-OVSDB_UPDATE = 0
-OVSDB_UPDATE2 = 1
-OVSDB_UPDATE3 = 2
+OVSDB_UPDATE = "update"
+OVSDB_UPDATE2 = "update2"
+OVSDB_UPDATE3 = "update3"
 
 CLUSTERED = "clustered"
 RELAY = "relay"
@@ -77,7 +77,7 @@ class ColumnDefaultDict(dict):
         return item in self.keys()
 
 
-class Monitor(enum.IntEnum):
+class Monitor(enum.Enum):
     monitor = OVSDB_UPDATE
     monitor_cond = OVSDB_UPDATE2
     monitor_cond_since = OVSDB_UPDATE3
@@ -465,23 +465,18 @@ class Idl(object):
                 self.__parse_update(msg.params[2], OVSDB_UPDATE3)
                 self.last_id = msg.params[1]
             elif (msg.type == ovs.jsonrpc.Message.T_NOTIFY
-                    and msg.method == "update2"
-                    and len(msg.params) == 2):
-                # Database contents changed.
-                self.__parse_update(msg.params[1], OVSDB_UPDATE2)
-            elif (msg.type == ovs.jsonrpc.Message.T_NOTIFY
-                    and msg.method == "update"
+                    and msg.method in (OVSDB_UPDATE, OVSDB_UPDATE2)
                     and len(msg.params) == 2):
                 # Database contents changed.
                 if msg.params[0] == str(self.server_monitor_uuid):
-                    self.__parse_update(msg.params[1], OVSDB_UPDATE,
+                    self.__parse_update(msg.params[1], msg.method,
                                         tables=self.server_tables)
                     self.change_seqno = previous_change_seqno
                     if not self.__check_server_db():
                         self.force_reconnect()
                         break
                 else:
-                    self.__parse_update(msg.params[1], OVSDB_UPDATE)
+                    self.__parse_update(msg.params[1], msg.method)
             elif self.handle_monitor_canceled(msg):
                 break
             elif self.handle_monitor_cancel_reply(msg):
@@ -540,7 +535,7 @@ class Idl(object):
                 # Reply to our "monitor" of _Server request.
                 try:
                     self._server_monitor_request_id = None
-                    self.__parse_update(msg.result, OVSDB_UPDATE,
+                    self.__parse_update(msg.result, OVSDB_UPDATE2,
                                         tables=self.server_tables)
                     self.change_seqno = previous_change_seqno
                     if self.__check_server_db():
@@ -579,6 +574,11 @@ class Idl(object):
             elif msg.type == ovs.jsonrpc.Message.T_NOTIFY and msg.id == "echo":
                 # Reply to our echo request.  Ignore it.
                 pass
+            elif (msg.type == ovs.jsonrpc.Message.T_ERROR and
+                  self.state == self.IDL_S_SERVER_MONITOR_REQUESTED and
+                  msg.id == self._server_monitor_request_id):
+                self._server_monitor_request_id = None
+                self.__send_monitor_request()
             elif (msg.type == ovs.jsonrpc.Message.T_ERROR and
                   self.state == (
                       self.IDL_S_DATA_MONITOR_COND_SINCE_REQUESTED) and
@@ -796,7 +796,7 @@ class Idl(object):
         for table in self.tables.values():
             if table.rows:
                 changed = True
-                table.rows = custom_index.IndexedRows(table)
+                table.rows.clear()
 
         self.cond_seqno = 0
 
@@ -912,7 +912,7 @@ class Idl(object):
         monitor_request = {"columns": columns}
         monitor_requests[table.name] = [monitor_request]
         msg = ovs.jsonrpc.Message.create_request(
-            'monitor', [self._server_db.name,
+            'monitor_cond', [self._server_db.name,
                              str(self.server_monitor_uuid),
                              monitor_requests])
         self._server_monitor_request_id = msg.id
@@ -962,7 +962,7 @@ class Idl(object):
 
                 if version in (OVSDB_UPDATE2, OVSDB_UPDATE3):
                     changes = self.__process_update2(table, uuid, row_update)
-                    if changes:
+                    if changes and tables is not self.server_tables:
                         notices.append(changes)
                         self.change_seqno += 1
                     continue
@@ -977,7 +977,7 @@ class Idl(object):
                                       '"new" members', row_update)
 
                 changes = self.__process_update(table, uuid, old, new)
-                if changes:
+                if changes and tables is not self.server_tables:
                     notices.append(changes)
                     self.change_seqno += 1
         for notice in notices:
@@ -1013,7 +1013,9 @@ class Idl(object):
             if not row:
                 raise error.Error('Modify non-existing row')
 
+            del table.rows[uuid]
             old_row = self.__apply_diff(table, row, row_update['modify'])
+            table.rows[uuid] = row
             return Notice(ROW_UPDATE, row, Row(self, table, uuid, old_row))
         else:
             raise error.Error('<row-update> unknown operation',
@@ -1044,9 +1046,10 @@ class Idl(object):
                 op = ROW_UPDATE
                 vlog.warn("cannot add existing row %s to table %s"
                           % (uuid, table.name))
+                del table.rows[uuid]
+
             changed |= self.__row_update(table, row, new)
-            if op == ROW_CREATE:
-                table.rows[uuid] = row
+            table.rows[uuid] = row
             if changed:
                 return Notice(ROW_CREATE, row)
         else:
@@ -1058,9 +1061,11 @@ class Idl(object):
                 # XXX rate-limit
                 vlog.warn("cannot modify missing row %s in table %s"
                           % (uuid, table.name))
+            else:
+                del table.rows[uuid]
+
             changed |= self.__row_update(table, row, new)
-            if op == ROW_CREATE:
-                table.rows[uuid] = row
+            table.rows[uuid] = row
             if changed:
                 return Notice(op, row, Row.from_json(self, table, uuid, old))
         return False
@@ -1224,6 +1229,29 @@ def _row_to_uuid(value):
         return value
 
 
+def _rows_to_uuid_str(value):
+    if isinstance(value, collections.abc.Mapping):
+        try:
+            k, v = next(iter(value.items()))
+            # Pass through early without iterating if not Rows.
+            if isinstance(k, Row) or isinstance(v, Row):
+                return {str(_row_to_uuid(x)): str(_row_to_uuid(y))
+                        for x, y in value.items()}
+        except StopIteration:
+            # Empty, return default.
+            pass
+    elif (isinstance(value, collections.abc.Iterable)
+        and not isinstance(value, str)):
+        try:
+            # Pass through early without iterating if not Rows.
+            if value and isinstance(value[0], Row):
+                return type(value)(str(_row_to_uuid(x)) for x in value)
+        except TypeError:
+            # Weird Iterable, pass through.
+            pass
+    return str(_row_to_uuid(value))
+
+
 @functools.total_ordering
 class Row(object):
     """A row within an IDL.
@@ -1329,11 +1357,12 @@ class Row(object):
         return int(self.__dict__['uuid'])
 
     def __str__(self):
-        return "{table}({data})".format(
+        return "{table}(uuid={uuid}, {data})".format(
             table=self._table.name,
-            data=", ".join("{col}={val}".format(col=c, val=getattr(self, c))
-                           for c in sorted(self._table.columns)
-                           if hasattr(self, c)))
+            uuid=self.uuid,
+            data=", ".join("{col}={val}".format(
+                col=c, val=_rows_to_uuid_str(getattr(self, c)))
+                for c in sorted(self._table.columns) if hasattr(self, c)))
 
     def _uuid_to_row(self, atom, base):
         if base.ref_table:
@@ -1703,6 +1732,8 @@ class Transaction(object):
 
         self._inserted_rows = {}  # Map from UUID to _InsertedRow
 
+        self._operations = []
+
     def add_comment(self, comment):
         """Appends 'comment' to the comments that will be passed to the OVSDB
         server when this transaction is committed.  (The comment will be
@@ -1724,7 +1755,7 @@ class Transaction(object):
                     and ovs.ovsuuid.is_valid_string(json[1])):
                 uuid = ovs.ovsuuid.from_string(json[1])
                 row = self._txn_rows.get(uuid, None)
-                if row and row._data is None:
+                if row and row._data is None and not row._persist_uuid:
                     return ["named-uuid", _uuid_name_from_uuid(uuid)]
             else:
                 return [self._substitute_uuids(elem) for elem in json]
@@ -1838,7 +1869,7 @@ class Transaction(object):
                                    "rows": [rows]})
 
         # Add updates.
-        any_updates = False
+        any_updates = bool(self._operations)
         for row in self._txn_rows.values():
             if row._changes is None:
                 if row._table.is_root:
@@ -1849,12 +1880,12 @@ class Transaction(object):
                 else:
                     # Let ovsdb-server decide whether to really delete it.
                     pass
-            elif row._changes:
+            else:
                 op = {"table": row._table.name}
                 if row._data is None:
                     op["op"] = "insert"
                     if row._persist_uuid:
-                        op["uuid"] = row.uuid
+                        op["uuid"] = str(row.uuid)
                     else:
                         op["uuid-name"] = _uuid_name_from_uuid(row.uuid)
 
@@ -1973,6 +2004,8 @@ class Transaction(object):
             operations.append({"op": "comment",
                                "comment": "\n".join(self._comments)})
 
+        operations += self._operations
+
         # Dry run?
         if self.dry_run:
             operations.append({"op": "abort"})
@@ -1990,6 +2023,21 @@ class Transaction(object):
 
         self.__disassemble()
         return self._status
+
+    def add_op(self, op):
+        """Add a raw OVSDB operation to the transaction
+
+        This can be useful for re-using the existing Idl connection to take
+        actions that are difficult or expensive to do with the Idl itself, e.g.
+        bulk deleting rows from the server without downloading them into a
+        local cache.
+
+        All ops are applied after any other operations in the transaction.
+
+        :param op: An "op" for an OVSDB "transact" request (rfc 7047 Sec 5.2)
+        :type op:  dict
+        """
+        self._operations.append(op)
 
     def commit_block(self):
         """Attempts to commit this transaction, blocking until the commit

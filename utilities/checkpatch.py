@@ -18,6 +18,7 @@ import email
 import getopt
 import os
 import re
+import subprocess
 import sys
 
 RETURN_CHECK_INITIAL_STATE = 0
@@ -28,25 +29,31 @@ __errors = 0
 __warnings = 0
 empty_return_check_state = 0
 print_file_name = None
+check_authors_file = False
 checking_file = False
 total_line = 0
 colors = False
 spellcheck = False
 quiet = False
 spell_check_dict = None
+missing_authors = []
+codespell_dictionaries = ['dictionary.txt', 'dictionary_code.txt']
+__codespell_dict_reset_once = True
 
 
 def open_spell_check_dict():
     import enchant
 
+    codespell_files = []
     try:
         import codespell_lib
         codespell_dir = os.path.dirname(codespell_lib.__file__)
-        codespell_file = os.path.join(codespell_dir, 'data', 'dictionary.txt')
-        if not os.path.exists(codespell_file):
-            codespell_file = ''
+        for fn in codespell_dictionaries:
+            fn = os.path.join(codespell_dir, 'data', fn)
+            if os.path.exists(fn):
+                codespell_files.append(fn)
     except:
-        codespell_file = ''
+        pass
 
     try:
         extra_keywords = ['ovs', 'vswitch', 'vswitchd', 'ovs-vswitchd',
@@ -97,14 +104,29 @@ def open_spell_check_dict():
                           'debian', 'travis', 'cirrus', 'appveyor', 'faq',
                           'erspan', 'const', 'hotplug', 'addresssanitizer',
                           'ovsdb', 'dpif', 'veth', 'rhel', 'jsonrpc', 'json',
-                          'syscall', 'lacp', 'ipf', 'skb', 'valgrind']
+                          'syscall', 'lacp', 'ipf', 'skb', 'valgrind',
+                          'appctl', 'arp', 'asan', 'backport', 'backtrace',
+                          'chmod', 'ci', 'cpu', 'cpus', 'dnat', 'dns', 'dpcls',
+                          'eol', 'ethtool', 'fdb', 'freebsd', 'gcc', 'github',
+                          'glibc', 'gre', 'inlined', 'ip', 'ipfix', 'ipsec',
+                          'ixgbe', 'libbpf', 'libcrypto', 'libgcc',
+                          'libopenvswitch', 'libreswan', 'libssl', 'libxdp',
+                          'lldp', 'llvm', 'lockless', 'mcast', 'megaflows',
+                          'mfex', 'ncat', 'networkmanager', 'pcap', 'pedit',
+                          'pidfile', 'pps', 'rculist', 'rebalance', 'rebased'
+                          'recirculations', 'revalidators', 'rst', 'sed',
+                          'shrinked', 'snat', 'stderr', 'stdout', 'testpmd',
+                          'tftp', 'timeval', 'trie', 'tso', 'ubsan', 'ukey',
+                          'umask', 'unassociated', 'unixctl', 'uuid'
+                          'virtqueue', 'vms', 'vnet', 'vport', 'vports',
+                          'vtep', 'wc', 'wget', 'xenserver', 'util']
 
         global spell_check_dict
 
         spell_check_dict = enchant.Dict("en_US")
 
-        if codespell_file:
-            with open(codespell_file) as f:
+        for fn in codespell_files:
+            with open(fn) as f:
                 for line in f.readlines():
                     words = line.strip().split('>')[1].strip(', ').split(',')
                     for word in words:
@@ -427,7 +449,8 @@ def check_spelling(line, comment):
     if not spell_check_dict or not spellcheck:
         return False
 
-    if line.startswith('Fixes: '):
+    is_name_tag = re.compile(r'^\s*([a-z-]+-by): (.*@.*)$', re.I | re.M | re.S)
+    if line.startswith('Fixes: ') or is_name_tag.match(line):
         return False
 
     words = filter_comments(line, True) if comment else line
@@ -479,7 +502,7 @@ def __check_doc_is_listed(text, doctype, docdir, docfile):
         docre = re.compile(r'\n\+.*{}'.format(docfile.replace('.rst', '')))
     elif doctype == 'automake':
         beginre = re.compile(r'\+\+\+.*Documentation/automake.mk')
-        docre = re.compile(r'\n\+\t{}/{}'.format(docdir, docfile))
+        docre = re.compile(r'\n\+\t(?:{}/)?{}'.format(docdir, docfile))
     else:
         raise NotImplementedError("Invalid doctype: {}".format(doctype))
 
@@ -650,6 +673,10 @@ checks = [
      'check': lambda x: has_efgrep(x),
      'print':
      lambda: print_error("grep -E/-F should be used instead of egrep/fgrep")},
+
+    {'regex': 'AUTHORS.rst$', 'match_name': None,
+     'check': lambda x: update_missing_authors(x),
+     'print': None},
 ]
 
 
@@ -723,7 +750,7 @@ infix_operators = \
             '&=', '^=', '|=', '<<=', '>>=']] \
     + [r'[^<" ]<[^=" ]',
        r'[^\->" ]>[^=" ]',
-       r'[^ !()/"]\*[^/]',
+       r'[^ !()/"\*]\*+[^/]',
        r'[^ !&()"]&',
        r'[^" +(]\+[^"+;]',
        r'[^" \-(]\-[^"\->;]',
@@ -844,9 +871,57 @@ def run_subject_checks(subject, spellcheck=False):
     return warnings
 
 
+def get_top_directory():
+    result = subprocess.run('git rev-parse --show-toplevel',
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, shell=True)
+
+    if result and result.returncode == 0:
+        return result.stdout.decode('utf-8').strip()
+
+    return os.getenv('OVS_SRC_DIR', '.')
+
+
+def update_missing_authors(diffed_line):
+    global missing_authors
+    for author in missing_authors:
+        m = re.search(r'<(.*?)>', author)
+        if not m:
+            continue
+        pattern = r'\b' + re.escape(m.group(1)) + r'\b'
+        if re.search(pattern, diffed_line) is None:
+            continue
+        else:
+            missing_authors.remove(author)
+
+    return False
+
+
+def do_authors_exist(authors):
+    authors = list(set(authors))
+    missing_authors = []
+
+    try:
+        with open(get_top_directory() + "/AUTHORS.rst", "r") as file:
+            file_content = file.read()
+            for author in authors:
+                m = re.search(r'<(.*?)>', author)
+                if not m:
+                    continue
+                pattern = r'\b' + re.escape(m.group(1)) + r'\b'
+                if re.search(pattern, file_content) is None:
+                    missing_authors.append(author)
+
+    except FileNotFoundError:
+        print_error("Could not open AUTHORS.rst in '%s/'!" %
+                    get_top_directory())
+
+    return missing_authors
+
+
 def ovs_checkpatch_parse(text, filename, author=None, committer=None):
     global print_file_name, total_line, checking_file, \
-        empty_return_check_state
+        empty_return_check_state, missing_authors
 
     PARSE_STATE_HEADING = 0
     PARSE_STATE_DIFF_HEADER = 1
@@ -961,6 +1036,11 @@ def ovs_checkpatch_parse(text, filename, author=None, committer=None):
                                       "who are not authors or co-authors or "
                                       "committers: %s"
                                       % ", ".join(extra_sigs))
+
+                if check_authors_file:
+                    missing_authors = do_authors_exist(missing_authors +
+                                                       co_authors + [author])
+
             elif is_committer.match(line):
                 committer = is_committer.match(line).group(2)
             elif is_author.match(line):
@@ -1051,7 +1131,10 @@ Input options:
 
 Check options:
 -h|--help                      This help message
+-a|--check-authors-file        Check AUTHORS file for existence of the authors.
+                               Should be used by commiters only!
 -b|--skip-block-whitespace     Skips the if/while/for whitespace tests
+-D|--dictionaries DICTIONARY   Specify codespell dictionaries.
 -l|--skip-leading-whitespace   Skips the leading whitespace test
 -q|--quiet                     Only print error and warning information
 -s|--skip-signoff-lines        Tolerate missing Signed-off-by line
@@ -1071,6 +1154,19 @@ def ovs_checkpatch_print_result():
               (total_line, __warnings, __errors))
     elif not quiet:
         print("Lines checked: %d, no obvious problems found\n" % (total_line))
+
+
+def ovs_checkpatch_print_missing_authors():
+    if missing_authors:
+        if len(missing_authors) == 1:
+            print_warning("Author '%s' is not in the AUTHORS.rst file!"
+                          % missing_authors[0])
+        else:
+            print_warning("Authors '%s' are not in the AUTHORS.rst file!"
+                          % ', '.join(missing_authors))
+        return True
+
+    return False
 
 
 def ovs_checkpatch_file(filename):
@@ -1093,13 +1189,17 @@ def ovs_checkpatch_file(filename):
         else:
             mail.add_header('Subject', sys.argv[-1])
 
-        print("Subject missing! Your provisional subject is",
-              mail['Subject'])
+        if not checking_file:
+            print("Subject missing! Your provisional subject is",
+                  mail['Subject'])
 
-    if run_subject_checks('Subject: ' + mail['Subject'], spellcheck):
+    if not checking_file and run_subject_checks('Subject: ' + mail['Subject'],
+                                                spellcheck):
         result = True
 
     ovs_checkpatch_print_result()
+    if ovs_checkpatch_print_missing_authors():
+        result = True
     return result
 
 
@@ -1122,9 +1222,11 @@ if __name__ == '__main__':
                                           sys.argv[1:])
         n_patches = int(numeric_options[-1][1:]) if numeric_options else 0
 
-        optlist, args = getopt.getopt(args, 'bhlstfSq',
+        optlist, args = getopt.getopt(args, 'abD:hlstfSq',
                                       ["check-file",
                                        "help",
+                                       "check-authors-file",
+                                       "dictionaries=",
                                        "skip-block-whitespace",
                                        "skip-leading-whitespace",
                                        "skip-signoff-lines",
@@ -1141,6 +1243,13 @@ if __name__ == '__main__':
         if o in ("-h", "--help"):
             usage()
             sys.exit(0)
+        elif o in ("-a", "--check-authors-file"):
+            check_authors_file = True
+        elif o in ("-D", "--dictionaries"):
+            if __codespell_dict_reset_once:
+                __codespell_dict_reset_once = False
+                codespell_dictionaries = []
+            codespell_dictionaries.append(a)
         elif o in ("-b", "--skip-block-whitespace"):
             skip_block_whitespace_check = True
         elif o in ("-l", "--skip-leading-whitespace"):
@@ -1156,11 +1265,7 @@ if __name__ == '__main__':
         elif o in ("-f", "--check-file"):
             checking_file = True
         elif o in ("-S", "--spellcheck"):
-            if not open_spell_check_dict():
-                print("WARNING: The enchant library isn't available.")
-                print("         Please install python enchant.")
-            else:
-                spellcheck = True
+            spellcheck = True
         elif o in ("-q", "--quiet"):
             quiet = True
         else:
@@ -1169,6 +1274,11 @@ if __name__ == '__main__':
 
     if sys.stdout.isatty():
         colors = True
+
+    if spellcheck and not open_spell_check_dict():
+        print("WARNING: The enchant library isn't available.")
+        print("         Please install python enchant.")
+        spellcheck = False
 
     if n_patches:
         status = 0
@@ -1191,9 +1301,10 @@ Subject: %s
             if not quiet:
                 print('== Checking %s ("%s") ==' % (revision[0:12], name))
             result = ovs_checkpatch_parse(patch, revision)
-            ovs_checkpatch_print_result()
             if result:
                 status = EXIT_FAILURE
+        if ovs_checkpatch_print_missing_authors():
+            status = EXIT_FAILURE
         sys.exit(status)
 
     if not args:
@@ -1202,6 +1313,8 @@ Subject: %s
             sys.exit(EXIT_FAILURE)
         result = ovs_checkpatch_parse(sys.stdin.read(), '-')
         ovs_checkpatch_print_result()
+        if ovs_checkpatch_print_missing_authors():
+            result = EXIT_FAILURE
         sys.exit(result)
 
     status = 0

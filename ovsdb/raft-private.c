@@ -91,13 +91,14 @@ raft_addresses_from_json(const struct json *json, struct sset *addresses)
 {
     sset_init(addresses);
 
-    const struct json_array *array = json_array(json);
-    if (!array->n) {
+    size_t n = json_array_size(json);
+
+    if (!n) {
         return ovsdb_syntax_error(json, NULL,
                                   "at least one remote address is required");
     }
-    for (size_t i = 0; i < array->n; i++) {
-        const struct json *address = array->elems[i];
+    for (size_t i = 0; i < n; i++) {
+        const struct json *address = json_array_at(json, i);
         struct ovsdb_error *error = raft_address_validate_json(address);
         if (error) {
             sset_destroy(addresses);
@@ -312,7 +313,7 @@ raft_entry_to_json(const struct raft_entry *e)
     if (raft_entry_has_data(e)) {
         json_object_put(json, "data",
                         json_clone(raft_entry_get_serialized_data(e)));
-        json_object_put_format(json, "eid", UUID_FMT, UUID_ARGS(&e->eid));
+        json_object_put_uuid(json, "eid", &e->eid);
     }
     if (e->servers) {
         json_object_put(json, "servers", json_clone(e->servers));
@@ -325,7 +326,7 @@ raft_entry_to_json(const struct raft_entry *e)
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_entry_from_json(struct json *json, struct raft_entry *e)
+raft_entry_from_json(const struct json *json, struct raft_entry *e)
 {
     memset(e, 0, sizeof *e);
 
@@ -509,10 +510,9 @@ raft_header_to_json(const struct raft_header *h)
 {
     struct json *json = json_object_create();
 
-    json_object_put_format(json, "server_id", UUID_FMT, UUID_ARGS(&h->sid));
+    json_object_put_uuid(json, "server_id", &h->sid);
     if (!uuid_is_zero(&h->cid)) {
-        json_object_put_format(json, "cluster_id",
-                               UUID_FMT, UUID_ARGS(&h->cid));
+        json_object_put_uuid(json, "cluster_id", &h->cid);
     }
     json_object_put_string(json, "local_address", h->local_address);
     json_object_put_string(json, "name", h->name);
@@ -532,8 +532,7 @@ raft_header_to_json(const struct raft_header *h)
             json_object_put(json, "prev_data",
                 json_clone(raft_entry_get_serialized_data(&h->snap)));
         }
-        json_object_put_format(json, "prev_eid",
-                               UUID_FMT, UUID_ARGS(&h->snap.eid));
+        json_object_put_uuid(json, "prev_eid", &h->snap.eid);
         if (h->snap.election_timer) {
             raft_put_uint64(json, "prev_election_timer",
                             h->snap.election_timer);
@@ -689,8 +688,7 @@ raft_record_to_json(const struct raft_record *r)
             raft_put_uint64(json, "election_timer", r->entry.election_timer);
         }
         if (!uuid_is_zero(&r->entry.eid)) {
-            json_object_put_format(json, "eid",
-                                   UUID_FMT, UUID_ARGS(&r->entry.eid));
+            json_object_put_uuid(json, "eid", &r->entry.eid);
         }
         break;
 
@@ -700,7 +698,7 @@ raft_record_to_json(const struct raft_record *r)
 
     case RAFT_REC_VOTE:
         raft_put_uint64(json, "term", r->term);
-        json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(&r->sid));
+        json_object_put_uuid(json, "vote", &r->sid);
         break;
 
     case RAFT_REC_NOTE:
@@ -713,7 +711,7 @@ raft_record_to_json(const struct raft_record *r)
 
     case RAFT_REC_LEADER:
         raft_put_uint64(json, "term", r->term);
-        json_object_put_format(json, "leader", UUID_FMT, UUID_ARGS(&r->sid));
+        json_object_put_uuid(json, "leader", &r->sid);
         break;
 
     default:

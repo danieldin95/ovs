@@ -21,6 +21,7 @@
 #include <string.h>
 #include <time.h>
 #include "timeval.h"
+#include "uuid.h"
 #include "util.h"
 
 /* Initializes 'ds' as an empty string buffer. */
@@ -186,6 +187,19 @@ ds_put_printable(struct ds *ds, const char *s, size_t n)
             ds_put_char(ds, c);
         }
     }
+}
+
+void
+ds_put_uuid(struct ds *ds, const struct uuid *uuid)
+{
+    /* We do not use dp_put_format() here to avoid two calls to
+     * vsnprintf().
+     *
+     * We CAN use UUID_LEN + 1 in snprintf because ds->string always
+     * contains one more byte for '\0'
+     */
+    snprintf(ds_put_uninit(ds, UUID_LEN), UUID_LEN + 1,
+             UUID_FMT, UUID_ARGS(uuid));
 }
 
 /* Writes the current time with optional millisecond resolution to 'string'
@@ -386,6 +400,21 @@ ds_put_hex(struct ds *ds, const void *buf_, size_t size)
     }
     if (!printed) {
         ds_put_char(ds, '0');
+    }
+}
+
+void
+ds_put_hex_with_delimiter(struct ds *ds, const void *buf_, size_t size,
+                          char *delimiter)
+{
+    const uint8_t *buf = buf_;
+    size_t i;
+
+    for (i = 0; i < size; i++) {
+        if (i && delimiter) {
+            ds_put_format(ds, "%s", delimiter);
+        }
+        ds_put_format(ds, "%02" PRIx8, buf[i]);
     }
 }
 

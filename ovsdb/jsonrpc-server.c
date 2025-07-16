@@ -107,7 +107,7 @@ static struct jsonrpc_msg *ovsdb_jsonrpc_monitor_cond_change(
     const struct json *request_id);
 static struct jsonrpc_msg *ovsdb_jsonrpc_monitor_cancel(
     struct ovsdb_jsonrpc_session *,
-    struct json_array *params,
+    const struct json *params,
     const struct json *request_id);
 static void ovsdb_jsonrpc_monitor_preremove_db(struct ovsdb_jsonrpc_session *,
                                                struct ovsdb *);
@@ -887,20 +887,21 @@ ovsdb_jsonrpc_lookup_db(const struct ovsdb_jsonrpc_session *s,
                         const struct jsonrpc_msg *request,
                         struct jsonrpc_msg **replyp)
 {
-    struct json_array *params;
+    const struct json *params;
     struct ovsdb_error *error;
     const char *db_name;
     struct ovsdb *db;
 
-    params = json_array(request->params);
-    if (!params->n || params->elems[0]->type != JSON_STRING) {
+    params = request->params;
+    if (!json_array_size(params)
+        || json_array_at(params, 0)->type != JSON_STRING) {
         error = ovsdb_syntax_error(
             request->params, NULL,
             "%s request params must begin with <db-name>", request->method);
         goto error;
     }
 
-    db_name = params->elems[0]->string;
+    db_name = json_string(json_array_at(params, 0));
     db = shash_find_data(&s->up.server->dbs, db_name);
     if (!db) {
         error = ovsdb_syntax_error(
@@ -932,18 +933,19 @@ static struct ovsdb_error *
 ovsdb_jsonrpc_session_parse_lock_name(const struct jsonrpc_msg *request,
                                       const char **lock_namep)
 {
-    const struct json_array *params;
+    const struct json *params = request->params;
+    const struct json *elem = json_array_at(params, 0);
 
-    params = json_array(request->params);
-    if (params->n != 1 || params->elems[0]->type != JSON_STRING ||
-        !ovsdb_parser_is_id(json_string(params->elems[0]))) {
+    if (json_array_size(params) != 1
+        || elem->type != JSON_STRING
+        || !ovsdb_parser_is_id(json_string(elem))) {
         *lock_namep = NULL;
-        return ovsdb_syntax_error(request->params, NULL,
+        return ovsdb_syntax_error(params, NULL,
                                   "%s request params must be <id>",
                                   request->method);
     }
 
-    *lock_namep = json_string(params->elems[0]);
+    *lock_namep = json_string(elem);
     return NULL;
 }
 
@@ -1088,14 +1090,14 @@ static struct jsonrpc_msg *
 ovsdb_jsonrpc_session_set_db_change_aware(struct ovsdb_jsonrpc_session *s,
                                           const struct jsonrpc_msg *request)
 {
-    const struct json_array *params = json_array(request->params);
-    if (params->n != 1
-        || (params->elems[0]->type != JSON_TRUE &&
-            params->elems[0]->type != JSON_FALSE)) {
+    const struct json *params = request->params;
+    if (json_array_size(params) != 1
+        || (json_array_at(params, 0)->type != JSON_TRUE &&
+            json_array_at(params, 0)->type != JSON_FALSE)) {
         return syntax_error_reply(request, "true or false parameter expected");
     }
 
-    s->db_change_aware = json_boolean(params->elems[0]);
+    s->db_change_aware = json_boolean(json_array_at(params, 0));
     return jsonrpc_create_reply(json_object_create(), request->id);
 }
 
@@ -1132,8 +1134,7 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
         reply = ovsdb_jsonrpc_monitor_cond_change(s, request->params,
                                                   request->id);
     } else if (!strcmp(request->method, "monitor_cancel")) {
-        reply = ovsdb_jsonrpc_monitor_cancel(s, json_array(request->params),
-                                             request->id);
+        reply = ovsdb_jsonrpc_monitor_cancel(s, request->params, request->id);
     } else if (!strcmp(request->method, "get_schema")) {
         struct ovsdb *db = ovsdb_jsonrpc_lookup_db(s, request, &reply);
         if (db && !reply) {
@@ -1157,8 +1158,7 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
         const struct uuid *uuid = &s->up.server->uuid;
         struct json *result;
 
-        result = json_string_create_nocopy(xasprintf(UUID_FMT,
-                                                    UUID_ARGS(uuid)));
+        result = json_string_create_uuid(uuid);
         reply = jsonrpc_create_reply(result, request->id);
     } else if (!strcmp(request->method, "lock")) {
         reply = ovsdb_jsonrpc_session_lock(s, request, OVSDB_LOCK_WAIT);
@@ -1184,11 +1184,11 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
 static void
 execute_cancel(struct ovsdb_jsonrpc_session *s, struct jsonrpc_msg *request)
 {
-    if (json_array(request->params)->n == 1) {
+    if (json_array_size(request->params) == 1) {
         struct ovsdb_jsonrpc_trigger *t;
-        struct json *id;
+        const struct json *id;
 
-        id = request->params->array.elems[0];
+        id = json_array_at(request->params, 0);
         t = ovsdb_jsonrpc_trigger_find(s, id, json_hash(id, 0));
         if (t) {
             ovsdb_jsonrpc_trigger_complete(t);
@@ -1432,23 +1432,25 @@ ovsdb_jsonrpc_parse_monitor_request(
 
     ovsdb_monitor_table_add_select(dbmon, table, select);
     if (columns) {
-        size_t i;
+        size_t i, n;
 
         if (columns->type != JSON_ARRAY) {
             return ovsdb_syntax_error(columns, NULL,
                                       "array of column names expected");
         }
 
-        for (i = 0; i < columns->array.n; i++) {
+        n = json_array_size(columns);
+        for (i = 0; i < n; i++) {
+            const struct json *elem = json_array_at(columns, i);
             const struct ovsdb_column *column;
             const char *s;
 
-            if (columns->array.elems[i]->type != JSON_STRING) {
+            if (elem->type != JSON_STRING) {
                 return ovsdb_syntax_error(columns, NULL,
                                           "array of column names expected");
             }
 
-            s = columns->array.elems[i]->string;
+            s = json_string(elem);
             column = shash_find_data(&table->schema->columns, s);
             if (!column) {
                 return ovsdb_syntax_error(columns, NULL, "%s is not a valid "
@@ -1494,20 +1496,20 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
 {
     ovs_assert(db);
 
+    const struct json *monitor_id, *monitor_requests;
     struct ovsdb_jsonrpc_monitor *m = NULL;
     struct ovsdb_monitor *dbmon = NULL;
-    struct json *monitor_id, *monitor_requests;
     struct ovsdb_error *error = NULL;
     struct shash_node *node;
     struct json *json;
 
-    if ((version == OVSDB_MONITOR_V2 && json_array(params)->n != 3) ||
-        (version == OVSDB_MONITOR_V3 && json_array(params)->n != 4)) {
+    if ((version == OVSDB_MONITOR_V2 && json_array_size(params) != 3) ||
+        (version == OVSDB_MONITOR_V3 && json_array_size(params) != 4)) {
         error = ovsdb_syntax_error(params, NULL, "invalid parameters");
         goto error;
     }
-    monitor_id = params->array.elems[1];
-    monitor_requests = params->array.elems[2];
+    monitor_id = json_array_at(params, 1);
+    monitor_requests = json_array_at(params, 2);
     if (monitor_requests->type != JSON_OBJECT) {
         error = ovsdb_syntax_error(monitor_requests, NULL,
                                    "monitor-requests must be object");
@@ -1533,7 +1535,7 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     SHASH_FOR_EACH (node, json_object(monitor_requests)) {
         const struct ovsdb_table *table;
         const struct json *mr_value;
-        size_t i;
+        size_t i, n;
 
         table = ovsdb_get_table(m->db, node->name);
         if (!table) {
@@ -1547,13 +1549,14 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
         /* Parse columns. */
         mr_value = node->data;
         if (mr_value->type == JSON_ARRAY) {
-            const struct json_array *array = &mr_value->array;
+            n = json_array_size(mr_value);
+            for (i = 0; i < n; i++) {
+                const struct json *elem = json_array_at(mr_value, i);
 
-            for (i = 0; i < array->n; i++) {
                 error = ovsdb_jsonrpc_parse_monitor_request(m->dbmon,
                                                             table,
                                                             m->condition,
-                                                            array->elems[i]);
+                                                            elem);
                 if (error) {
                     goto error;
                 }
@@ -1584,14 +1587,15 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
 
     bool initial = false;
     if (version == OVSDB_MONITOR_V3) {
-        struct json *last_id = params->array.elems[3];
+        const struct json *last_id = json_array_at(params, 3);
+
         if (last_id->type != JSON_STRING) {
             error = ovsdb_syntax_error(last_id, NULL,
                                        "last-txn-id must be string");
             goto error;
         }
         struct uuid txn_uuid;
-        if (!uuid_from_string(&txn_uuid, last_id->string)) {
+        if (!uuid_from_string(&txn_uuid, json_string(last_id))) {
             error = ovsdb_syntax_error(last_id, NULL,
                                        "last-txn-id must be UUID format.");
             goto error;
@@ -1609,10 +1613,8 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     json = json ? json : json_object_create();
 
     if (m->version == OVSDB_MONITOR_V3) {
-        struct json *json_last_id = json_string_create_nocopy(
-                xasprintf(UUID_FMT,
-                          UUID_ARGS(ovsdb_monitor_get_last_txnid(
-                                  m->dbmon))));
+        struct json *json_last_id = json_string_create_uuid(
+            ovsdb_monitor_get_last_txnid(m->dbmon));
 
         struct json *json_found = json_boolean_create(!initial);
         json = json_array_create_3(json_found, json_last_id, json);
@@ -1664,24 +1666,24 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
                                   struct json *params,
                                   const struct json *request_id)
 {
-    struct ovsdb_error *error;
+    const struct json *monitor_cond_change_reqs;
     struct ovsdb_jsonrpc_monitor *m;
-    struct json *monitor_cond_change_reqs;
+    struct ovsdb_error *error;
     struct shash_node *node;
 
-    if (json_array(params)->n != 3) {
+    if (json_array_size(params) != 3) {
         error = ovsdb_syntax_error(params, NULL, "invalid parameters");
         goto error;
     }
 
-    m = ovsdb_jsonrpc_monitor_find(s, params->array.elems[0]);
+    m = ovsdb_jsonrpc_monitor_find(s, json_array_at(params, 0));
     if (!m) {
-        error = ovsdb_syntax_error(params->array.elems[0], NULL,
+        error = ovsdb_syntax_error(json_array_at(params, 0), NULL,
                                    "unknown monitor session");
         goto error;
     }
 
-    const struct json *new_monitor_id = params->array.elems[1];
+    const struct json *new_monitor_id = json_array_at(params, 1);
     bool changing_id = !json_equal(m->monitor_id, new_monitor_id);
     if (changing_id && ovsdb_jsonrpc_monitor_find(s, new_monitor_id)) {
         error = ovsdb_syntax_error(new_monitor_id, NULL,
@@ -1689,7 +1691,7 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
         goto error;
     }
 
-    monitor_cond_change_reqs = params->array.elems[2];
+    monitor_cond_change_reqs = json_array_at(params, 2);
     if (monitor_cond_change_reqs->type != JSON_OBJECT) {
         error =
             ovsdb_syntax_error(NULL, NULL,
@@ -1700,7 +1702,7 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
     SHASH_FOR_EACH (node, json_object(monitor_cond_change_reqs)) {
         const struct ovsdb_table *table;
         const struct json *mr_value;
-        size_t i;
+        size_t i, n;
 
         table = ovsdb_get_table(m->db, node->name);
         if (!table) {
@@ -1717,11 +1719,10 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
 
         mr_value = node->data;
         if (mr_value->type == JSON_ARRAY) {
-            const struct json_array *array = &mr_value->array;
-
-            for (i = 0; i < array->n; i++) {
+            n = json_array_size(mr_value);
+            for (i = 0; i < n; i++) {
                 error = ovsdb_jsonrpc_parse_monitor_cond_change_request(
-                                            m, table, array->elems[i]);
+                                    m, table, json_array_at(mr_value, i));
                 if (error) {
                     goto error;
                 }
@@ -1752,10 +1753,8 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
         struct jsonrpc_msg *msg;
         struct json *p;
         if (m->version == OVSDB_MONITOR_V3) {
-            struct json *json_last_id = json_string_create_nocopy(
-                    xasprintf(UUID_FMT,
-                              UUID_ARGS(ovsdb_monitor_get_last_txnid(
-                                      m->dbmon))));
+            struct json *json_last_id = json_string_create_uuid(
+                ovsdb_monitor_get_last_txnid(m->dbmon));
 
             p = json_array_create_3(json_clone(m->monitor_id), json_last_id,
                                     update_json);
@@ -1774,16 +1773,16 @@ error:
 
 static struct jsonrpc_msg *
 ovsdb_jsonrpc_monitor_cancel(struct ovsdb_jsonrpc_session *s,
-                             struct json_array *params,
+                             const struct json *params,
                              const struct json *request_id)
 {
-    if (params->n != 1) {
+    if (json_array_size(params) != 1) {
         return jsonrpc_create_error(json_string_create("invalid parameters"),
                                     request_id);
     } else {
         struct ovsdb_jsonrpc_monitor *m;
 
-        m = ovsdb_jsonrpc_monitor_find(s, params->elems[0]);
+        m = ovsdb_jsonrpc_monitor_find(s, json_array_at(params, 0));
         if (!m) {
             return jsonrpc_create_error(json_string_create("unknown monitor"),
                                         request_id);
@@ -1912,10 +1911,8 @@ ovsdb_jsonrpc_monitor_flush_all(struct ovsdb_jsonrpc_session *s)
             struct jsonrpc_msg *msg;
             struct json *params;
             if (m->version == OVSDB_MONITOR_V3) {
-                struct json *json_last_id = json_string_create_nocopy(
-                        xasprintf(UUID_FMT,
-                                  UUID_ARGS(ovsdb_monitor_get_last_txnid(
-                                          m->dbmon))));
+                struct json *json_last_id = json_string_create_uuid(
+                    ovsdb_monitor_get_last_txnid(m->dbmon));
                 params = json_array_create_3(json_clone(m->monitor_id),
                                              json_last_id, json);
             } else {

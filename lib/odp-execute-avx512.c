@@ -367,6 +367,8 @@ avx512_get_delta(__m256i old_header, __m256i new_header)
     v_delta = _mm256_permutexvar_epi32(v_swap32a, v_delta);
 
     v_delta = _mm256_hadd_epi32(v_delta, v_zeros);
+    v_delta = _mm256_shuffle_epi8(v_delta, v_swap16a);
+    v_delta = _mm256_hadd_epi32(v_delta, v_zeros);
     v_delta = _mm256_hadd_epi16(v_delta, v_zeros);
 
     /* Extract delta value. */
@@ -471,8 +473,8 @@ action_avx512_ipv4_set_addrs(struct dp_packet_batch *batch,
          * (v_pkt_masked). */
         __m256i v_new_hdr = _mm256_or_si256(v_key_shuf, v_pkt_masked);
 
-        if (dp_packet_hwol_tx_ip_csum(packet)) {
-            dp_packet_ol_reset_ip_csum_good(packet);
+        if (dp_packet_ip_checksum_valid(packet)) {
+            dp_packet_ip_checksum_set_partial(packet);
         } else {
             ovs_be16 old_csum = ~nh->ip_csum;
 
@@ -496,8 +498,8 @@ action_avx512_ipv4_set_addrs(struct dp_packet_batch *batch,
 
             if (nh->ip_proto == IPPROTO_UDP && l4_size >= UDP_HEADER_LEN) {
                 struct udp_header *uh = dp_packet_l4(packet);
-                if (dp_packet_hwol_l4_is_udp(packet)) {
-                    dp_packet_ol_reset_l4_csum_good(packet);
+                if (dp_packet_l4_checksum_valid(packet)) {
+                    dp_packet_l4_checksum_set_partial(packet);
                 } else if (uh->udp_csum) {
                     /* New UDP checksum. */
                     uint16_t old_udp_checksum = ~uh->udp_csum;
@@ -512,8 +514,8 @@ action_avx512_ipv4_set_addrs(struct dp_packet_batch *batch,
                 }
             } else if (nh->ip_proto == IPPROTO_TCP &&
                        l4_size >= TCP_HEADER_LEN) {
-                if (dp_packet_hwol_l4_is_tcp(packet)) {
-                    dp_packet_ol_reset_l4_csum_good(packet);
+                if (dp_packet_l4_checksum_valid(packet)) {
+                    dp_packet_l4_checksum_set_partial(packet);
                 } else {
                     /* New TCP checksum. */
                     struct tcp_header *th = dp_packet_l4(packet);
@@ -575,6 +577,9 @@ avx512_ipv6_sum_header(__m512i ip6_header)
                                           0xF, 0xF, 0xF, 0xF);
 
     v_delta = _mm256_permutexvar_epi32(v_swap32a, v_delta);
+
+    v_delta = _mm256_hadd_epi32(v_delta, v_zeros);
+    v_delta = _mm256_shuffle_epi8(v_delta, v_swap16a);
     v_delta = _mm256_hadd_epi32(v_delta, v_zeros);
     v_delta = _mm256_hadd_epi16(v_delta, v_zeros);
 
@@ -686,8 +691,8 @@ action_avx512_set_ipv6(struct dp_packet_batch *batch, const struct nlattr *a)
 
             if (proto == IPPROTO_UDP && l4_size >= UDP_HEADER_LEN) {
                 struct udp_header *uh = dp_packet_l4(packet);
-                if (dp_packet_hwol_l4_is_udp(packet)) {
-                    dp_packet_ol_reset_l4_csum_good(packet);
+                if (dp_packet_l4_checksum_valid(packet)) {
+                    dp_packet_l4_checksum_set_partial(packet);
                 } else if (uh->udp_csum) {
                     delta_checksum = avx512_ipv6_addr_csum_delta(v_packet,
                                                                  v_new_hdr,
@@ -706,8 +711,8 @@ action_avx512_set_ipv6(struct dp_packet_batch *batch, const struct nlattr *a)
                 }
 
             } else if (proto == IPPROTO_TCP && l4_size >= TCP_HEADER_LEN) {
-                if (dp_packet_hwol_l4_is_tcp(packet)) {
-                    dp_packet_ol_reset_l4_csum_good(packet);
+                if (dp_packet_l4_checksum_valid(packet)) {
+                    dp_packet_l4_checksum_set_partial(packet);
                 } else {
                     delta_checksum = avx512_ipv6_addr_csum_delta(v_packet,
                                                                  v_new_hdr,
@@ -736,6 +741,14 @@ action_avx512_set_ipv6(struct dp_packet_batch *batch, const struct nlattr *a)
         }
         /* Write back the modified IPv6 addresses. */
         _mm512_mask_storeu_epi64((void *) nh, 0x1F, v_new_hdr);
+
+        /* Scalar method for setting IPv6 tclass field. */
+        if (key->ipv6_tclass) {
+            uint8_t old_tc = ntohl(get_16aligned_be32(&nh->ip6_flow)) >> 20;
+            uint8_t key_tc = key->ipv6_tclass | (old_tc & ~mask->ipv6_tclass);
+
+            packet_set_ipv6_tc(&nh->ip6_flow, key_tc);
+        }
     }
 }
 #endif /* HAVE_AVX512VBMI */

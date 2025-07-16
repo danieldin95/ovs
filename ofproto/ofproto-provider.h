@@ -450,6 +450,8 @@ void ofproto_rule_ref(struct rule *);
 bool ofproto_rule_try_ref(struct rule *);
 void ofproto_rule_unref(struct rule *);
 
+void ofproto_rule_stats_ds(struct ds *, struct rule *, bool offload_stats);
+
 static inline const struct rule_actions * rule_get_actions(const struct rule *);
 static inline bool rule_is_table_miss(const struct rule *);
 static inline bool rule_is_hidden(const struct rule *);
@@ -549,6 +551,10 @@ extern unsigned ofproto_offloaded_stats_delay;
 /* Number of upcall handler and revalidator threads. Only affects the
  * ofproto-dpif implementation. */
 extern uint32_t n_handlers, n_revalidators;
+
+/* If an explicit datapath drop action shall be added after trailing sample
+ * actions coming from IPFIX / sFlow / local sampling. */
+extern bool ofproto_explicit_sampled_drops;
 
 static inline struct rule *rule_from_cls_rule(const struct cls_rule *);
 
@@ -1488,6 +1494,15 @@ struct ofproto_class {
         const struct ofproto *ofproto,
         bool bridge_ipfix, struct ovs_list *replies
         );
+
+    /* Configures local sampling on 'ofproto' according to the options array
+     * of 'options' which contains 'n_options' elements.
+     *
+     * EOPNOTSUPP as a return value indicates that 'ofproto' does not support
+     * local sampling. */
+    int (*set_local_sample)(struct ofproto *ofproto,
+                            const struct ofproto_lsample_options *options,
+                            size_t n_options);
 
     /* Configures connectivity fault management on 'ofport'.
      *

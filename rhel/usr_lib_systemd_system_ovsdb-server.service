@@ -18,7 +18,8 @@ EnvironmentFile=-/run/openvswitch.useropts
 # OVS_USER_ID from default.conf or sysconfig.
 ExecStartPre=/usr/bin/rm -f /run/openvswitch.useropts
 
-ExecStartPre=-/usr/bin/chown ${OVS_USER_ID} /run/openvswitch /var/log/openvswitch
+ExecStartPre=-/usr/bin/chown -R ${OVS_USER_ID} \
+             /etc/openvswitch /run/openvswitch /var/log/openvswitch
 ExecStartPre=/bin/sh -c '/usr/bin/echo "OVS_USER_ID=${OVS_USER_ID}" > /run/openvswitch.useropts'
 ExecStartPre=/bin/sh -c 'if [ "$${OVS_USER_ID/:*/}" != "root" ]; then /usr/bin/echo "OVS_USER_OPT=--ovs-user=${OVS_USER_ID}" >> /run/openvswitch.useropts; fi'
 ExecStart=/usr/share/openvswitch/scripts/ovs-ctl \
@@ -29,3 +30,4 @@ ExecStop=/usr/share/openvswitch/scripts/ovs-ctl --no-ovs-vswitchd stop
 ExecReload=/usr/share/openvswitch/scripts/ovs-ctl --no-ovs-vswitchd \
            ${OVS_USER_OPT} \
            --no-monitor restart $OPTIONS
+TimeoutSec=300

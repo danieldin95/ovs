@@ -262,16 +262,16 @@ unwrap_json(const struct json *json, const char *name,
             enum json_type value_type, const struct json **value)
 {
     if (json->type != JSON_ARRAY
-        || json->array.n != 2
-        || json->array.elems[0]->type != JSON_STRING
-        || (name && strcmp(json->array.elems[0]->string, name))
-        || json->array.elems[1]->type != value_type)
+        || json_array_size(json) != 2
+        || json_array_at(json, 0)->type != JSON_STRING
+        || (name && strcmp(json_string(json_array_at(json, 0)), name))
+        || json_array_at(json, 1)->type != value_type)
     {
         *value = NULL;
         return ovsdb_syntax_error(json, NULL, "expected [\"%s\", <%s>]", name,
                                   json_type_to_string(value_type));
     }
-    *value = json->array.elems[1];
+    *value = json_array_at(json, 1);
     return NULL;
 }
 
@@ -279,11 +279,11 @@ static struct ovsdb_error *
 parse_json_pair(const struct json *json,
                 const struct json **elem0, const struct json **elem1)
 {
-    if (json->type != JSON_ARRAY || json->array.n != 2) {
+    if (json->type != JSON_ARRAY || json_array_size(json) != 2) {
         return ovsdb_syntax_error(json, NULL, "expected 2-element array");
     }
-    *elem0 = json->array.elems[0];
-    *elem1 = json->array.elems[1];
+    *elem0 = json_array_at(json, 0);
+    *elem1 = json_array_at(json, 1);
     return NULL;
 }
 
@@ -483,8 +483,7 @@ ovsdb_atom_to_json__(const union ovsdb_atom *atom, enum ovsdb_atomic_type type,
                                     : json_deep_clone(atom->s);
 
     case OVSDB_TYPE_UUID:
-        return wrap_json("uuid", json_string_create_nocopy(
-                             xasprintf(UUID_FMT, UUID_ARGS(&atom->uuid))));
+        return wrap_json("uuid", json_string_create_uuid(&atom->uuid));
 
     case OVSDB_N_TYPES:
     default:
@@ -753,7 +752,7 @@ ovsdb_atom_to_string(const union ovsdb_atom *atom, enum ovsdb_atomic_type type,
         break;
 
     case OVSDB_TYPE_UUID:
-        ds_put_format(out, UUID_FMT, UUID_ARGS(&atom->uuid));
+        ds_put_uuid(out, &atom->uuid);
         break;
 
     case OVSDB_N_TYPES:
@@ -1230,7 +1229,7 @@ ovsdb_datum_sort_unique(struct ovsdb_datum *datum,
         }
     }
     datum->n = dst;
-    return datum->n - src;
+    return src - datum->n;
 }
 
 /* Checks that each of the atoms in 'datum' conforms to the constraints
@@ -1277,9 +1276,9 @@ ovsdb_datum_from_json__(struct ovsdb_datum *datum,
 
     if (ovsdb_type_is_map(type)
         || (json->type == JSON_ARRAY
-            && json->array.n > 0
-            && json->array.elems[0]->type == JSON_STRING
-            && !strcmp(json->array.elems[0]->string, "set"))) {
+            && json_array_size(json) > 0
+            && json_array_at(json, 0)->type == JSON_STRING
+            && !strcmp(json_string(json_array_at(json, 0)), "set"))) {
         bool is_map = ovsdb_type_is_map(type);
         const char *class = is_map ? "map" : "set";
         const struct json *inner;
@@ -1291,7 +1290,7 @@ ovsdb_datum_from_json__(struct ovsdb_datum *datum,
             return error;
         }
 
-        n = inner->array.n;
+        n = json_array_size(inner);
         if (n < type->n_min || n > type->n_max) {
             if (type->n_min == 1 && type->n_max == 1) {
                 return ovsdb_syntax_error(json, NULL, "%s must have exactly "
@@ -1310,7 +1309,7 @@ ovsdb_datum_from_json__(struct ovsdb_datum *datum,
         datum->values = is_map ? xmalloc(n * sizeof *datum->values) : NULL;
         datum->refcnt = NULL;
         for (i = 0; i < n; i++) {
-            const struct json *element = inner->array.elems[i];
+            const struct json *element = json_array_at(inner, i);
             const struct json *key = NULL;
             const struct json *value = NULL;
 

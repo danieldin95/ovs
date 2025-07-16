@@ -941,9 +941,9 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd,
                                         ? "(enabled) " : "(disabled)");
             ds_put_format(reply, "  pmd usage: ");
             if (total_pmd_cycles) {
-                ds_put_format(reply, "%2"PRIu64"",
-                              rxq_proc_cycles * 100 / total_pmd_cycles);
-                ds_put_cstr(reply, " %");
+                ds_put_format(reply, "%2.0f %%",
+                              (double) (rxq_proc_cycles * 100) /
+                              total_pmd_cycles);
             } else {
                 ds_put_format(reply, "%s", "NOT AVAIL");
             }
@@ -958,8 +958,10 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd,
                 if (total_rxq_proc_cycles < busy_pmd_cycles) {
                     overhead_cycles = busy_pmd_cycles - total_rxq_proc_cycles;
                 }
-                ds_put_format(reply, "%2"PRIu64" %%",
-                              overhead_cycles * 100 / total_pmd_cycles);
+
+                ds_put_format(reply, "%2.0f %%",
+                              (double) (overhead_cycles * 100) /
+                              total_pmd_cycles);
             } else {
                 ds_put_cstr(reply, "NOT AVAIL");
             }
@@ -3038,7 +3040,7 @@ log_netdev_flow_change(const struct dp_netdev_flow *flow,
     ds_put_cstr(&ds, " ");
     odp_flow_format(key_buf.data, key_buf.size,
                     mask_buf.data, mask_buf.size,
-                    NULL, &ds, false);
+                    NULL, &ds, false, true);
     if (old_actions) {
         ds_put_cstr(&ds, ", old_actions:");
         format_odp_actions(&ds, old_actions->actions, old_actions->size,
@@ -3858,7 +3860,7 @@ dpif_netdev_mask_from_nlattrs(const struct nlattr *key, uint32_t key_len,
 
                 ds_init(&s);
                 odp_flow_format(key, key_len, mask_key, mask_key_len, NULL, &s,
-                                true);
+                                true, true);
                 VLOG_ERR("internal error parsing flow mask %s (%s)",
                 ds_cstr(&s), odp_key_fitness_to_string(fitness));
                 ds_destroy(&s);
@@ -3887,7 +3889,7 @@ dpif_netdev_flow_from_nlattrs(const struct nlattr *key, uint32_t key_len,
                 struct ds s;
 
                 ds_init(&s);
-                odp_flow_format(key, key_len, NULL, 0, NULL, &s, true);
+                odp_flow_format(key, key_len, NULL, 0, NULL, &s, true, false);
                 VLOG_ERR("internal error parsing flow key %s", ds_cstr(&s));
                 ds_destroy(&s);
             }
@@ -6516,9 +6518,6 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
     struct sched_numa_list numa_list_cur;
     struct sched_numa_list numa_list_est;
     bool thresh_met = false;
-    uint64_t current_var, estimate_var;
-    struct sched_numa *numa_cur, *numa_est;
-    uint64_t improvement = 0;
 
     VLOG_DBG("PMD auto load balance performing dry run.");
 
@@ -6534,9 +6533,14 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
     /* Check if cross-numa polling, there is only one numa with PMDs. */
     if (!sched_numa_list_cross_numa_polling(&numa_list_est) ||
             sched_numa_list_count(&numa_list_est) == 1) {
+        struct sched_numa *numa_cur;
 
         /* Calculate variances. */
         HMAP_FOR_EACH (numa_cur, node, &numa_list_cur.numas) {
+            uint64_t current_var, estimate_var;
+            struct sched_numa *numa_est;
+            uint64_t improvement = 0;
+
             numa_est = sched_numa_list_lookup(&numa_list_est,
                                               numa_cur->numa_id);
             if (!numa_est) {
@@ -9489,6 +9493,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_CHECK_PKT_LEN:
     case OVS_ACTION_ATTR_DROP:
     case OVS_ACTION_ATTR_ADD_MPLS:
+    case OVS_ACTION_ATTR_DEC_TTL:
+    case OVS_ACTION_ATTR_PSAMPLE:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }
@@ -9699,7 +9705,7 @@ dpif_netdev_ct_get_limits(struct dpif *dpif,
                            struct ovs_list *zone_limits_reply)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    struct conntrack_zone_limit czl;
+    struct conntrack_zone_info czl;
 
     if (!ovs_list_is_empty(zone_limits_request)) {
         struct ct_dpif_zone_limit *zone_limit;
@@ -9708,7 +9714,7 @@ dpif_netdev_ct_get_limits(struct dpif *dpif,
             if (czl.zone == zone_limit->zone || czl.zone == DEFAULT_ZONE) {
                 ct_dpif_push_zone_limit(zone_limits_reply, zone_limit->zone,
                                         czl.limit,
-                                        atomic_count_get(&czl.count));
+                                        czl.count);
             } else {
                 return EINVAL;
             }
@@ -9724,7 +9730,7 @@ dpif_netdev_ct_get_limits(struct dpif *dpif,
             czl = zone_limit_get(dp->conntrack, z);
             if (czl.zone == z) {
                 ct_dpif_push_zone_limit(zone_limits_reply, z, czl.limit,
-                                        atomic_count_get(&czl.count));
+                                        czl.count);
             }
         }
     }

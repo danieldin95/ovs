@@ -27,7 +27,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "compiler.h"
-#include "util.h"
 #include "openvswitch/util.h"
 #if defined(__aarch64__) && __GNUC__ >= 6
 #include <arm_neon.h>
@@ -156,8 +155,8 @@ void ctl_timeout_setup(unsigned int secs);
 
 void ovs_print_version(uint8_t min_ofp, uint8_t max_ofp);
 
-void set_memory_locked(void);
-bool memory_locked(void);
+void set_all_memory_locked(void);
+bool memory_all_locked(void);
 
 OVS_NO_RETURN void out_of_memory(void);
 
@@ -609,6 +608,10 @@ int ftruncate(int fd, off_t length);
 
 #ifdef  __cplusplus
 }
+#endif
+
+#ifdef __linux__
+bool ovs_kernel_is_version_or_newer(int target_major, int target_minor);
 #endif
 
 #endif /* util.h */

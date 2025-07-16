@@ -37,7 +37,7 @@ repository, which you can clone into a directory named "ovs" with::
 
     $ git clone https://github.com/openvswitch/ovs.git
 
-Cloning the repository leaves the "master" branch initially checked
+Cloning the repository leaves the "main" branch initially checked
 out.  This is the right branch for general development.  If, on the
 other hand, if you want to build a particular released version, you
 can check it out by running a command such as the following from the
@@ -90,7 +90,7 @@ need the following software:
   If libcap-ng is installed, then Open vSwitch will automatically build with
   support for it.
 
-- Python 3.6 or later.
+- Python 3.7 or later.
 
 - Unbound library, from http://www.unbound.net, is optional but recommended if
   you want to enable ovs-vswitchd and other utilities to use DNS names when
@@ -101,39 +101,9 @@ need the following software:
   environment variable OVS_UNBOUND_CONF can be used to specify the
   configuration file for unbound.
 
-On Linux, you may choose to compile the kernel module that comes with the Open
-vSwitch distribution or to use the kernel module built into the Linux kernel
-(version 3.3 or later). See the :doc:`/faq/index` question "What features are
-not available in the Open vSwitch kernel datapath that ships as part of the
-upstream Linux kernel?" for more information on this trade-off. You may also
-use the userspace-only implementation, at some cost in features and
-performance. Refer to :doc:`userspace` for details.
-
-To compile the kernel module on Linux, you must also install the
-following:
-
-- A supported Linux kernel version.
-
-  For optional support of ingress policing, you must enable kernel
-  configuration options ``NET_CLS_BASIC``, ``NET_SCH_INGRESS``, and
-  ``NET_ACT_POLICE``, either built-in or as modules. ``NET_CLS_POLICE`` is
-  obsolete and not needed.)
-
-  On kernels before 3.11, the ``ip_gre`` module, for GRE tunnels over IP
-  (``NET_IPGRE``), must not be loaded or compiled in.
-
-  To configure HTB or HFSC quality of service with Open vSwitch, you must
-  enable the respective configuration options.
-
-  To use Open vSwitch support for TAP devices, you must enable ``CONFIG_TUN``.
-
-- To build a kernel module, you need the same version of GCC that was used to
-  build that kernel.
-
-- A kernel build directory corresponding to the Linux kernel image the module
-  is to run on. Under Debian and Ubuntu, for example, each linux-image package
-  containing a kernel binary has a corresponding linux-headers package with
-  the required build infrastructure.
+On Linux, you may use the kernel module distributed with the upstream Linux
+kernel 3.3 or later. You may also use the userspace-only implementation, at
+some cost in features and performance. Refer to :doc:`userspace` for details.
 
 If you are working from a Git tree or snapshot (instead of from a distribution
 tarball), or if you modify the Open vSwitch build system or the database
@@ -149,9 +119,6 @@ The datapath tests for userspace and Linux datapaths also rely upon:
 
 - pyftpdlib. Version 1.2.0 is known to work. Earlier versions should
   also work.
-
-- GNU wget. Version 1.16 is known to work. Earlier versions should also
-  work.
 
 - netcat. Several common implementations are known to work.
 
@@ -169,17 +136,14 @@ other than plain text, only if you have the following:
 If you are going to extensively modify Open vSwitch, consider installing the
 following to obtain better warnings:
 
-- "sparse" version 0.6.2 or later
+- "sparse" version 0.6.4 or later
   (https://git.kernel.org/pub/scm/devel/sparse/sparse.git/).
 
 - GNU make.
 
 - clang, version 3.4 or later
 
-- flake8 along with the hacking flake8 plugin (for Python code). The automatic
-  flake8 check that runs against Python code has some warnings enabled that
-  come from the "hacking" flake8 plugin. If it's not installed, the warnings
-  just won't occur until it's run on a system with "hacking" installed.
+- flake8 (for Python code)
 
 - the python packages listed in "python/test_requirements.txt" (compatible
   with pip). If they are installed, the pytest-based Python unit tests will
@@ -198,17 +162,16 @@ simply install and run Open vSwitch you require the following software:
 - Shared libraries compatible with those used for the build.
 
 - On Linux, if you want to use the kernel-based datapath (which is the most
-  common use case), then a kernel with a compatible kernel module.  This
-  can be a kernel module built with Open vSwitch (e.g. in the previous
-  step), or the kernel module that accompanies Linux 3.3 and later.  Open
-  vSwitch features and performance can vary based on the module and the
-  kernel.  Refer to :doc:`/faq/releases` for more information.
+  common use case), then a kernel with a compatible kernel module. The kernel
+  module is distributed with the upstream Linux kernel 3.3 and later. Open
+  vSwitch features and performance can vary based on the kernel version.
+  Refer to :doc:`/faq/releases` for more information.
 
 - For optional support of ingress policing on Linux, the "tc" program
   from iproute2 (part of all major distributions and available at
   https://wiki.linuxfoundation.org/networking/iproute2).
 
-- Python 3.6 or later.
+- Python 3.7 or later.
 
 On Linux you should ensure that ``/dev/urandom`` exists. To support TAP
 devices, you must also ensure that ``/dev/net/tun`` exists.
@@ -292,13 +255,6 @@ With this, GCC will detect the processor and automatically set appropriate
 flags for it. This should not be used if you are compiling OVS outside the
 target machine.
 
-.. note::
-  CFLAGS are not applied when building the Linux kernel module. Custom CFLAGS
-  for the kernel module are supplied using the ``EXTRA_CFLAGS`` variable when
-  running make. For example::
-
-      $ make EXTRA_CFLAGS="-Wno-error=date-time"
-
 If you are a developer and want to enable Address Sanitizer for debugging
 purposes, at about a 2x runtime cost, you can add
 ``-fsanitize=address -fno-omit-frame-pointer -fno-common`` to CFLAGS.  For
@@ -332,8 +288,7 @@ option::
 
 You can also run configure from a separate build directory. This is helpful if
 you want to build Open vSwitch in more than one way from a single source
-directory, e.g. to try out both GCC and Clang builds, or to build kernel
-modules for more than one Linux version. For example::
+directory, e.g. to try out both GCC and Clang builds. For example::
 
     $ mkdir _gcc && (cd _gcc && ./configure CC=gcc)
     $ mkdir _clang && (cd _clang && ./configure CC=clang)
@@ -435,7 +390,7 @@ database that it can use::
 
 Configure ovsdb-server to use database created above, to listen on a Unix
 domain socket, to connect to any managers specified in the database itself, and
-to use the SSL configuration in the database::
+to use the SSL/TLS configuration in the database::
 
     $ mkdir -p /usr/local/var/run/openvswitch
     $ ovsdb-server --remote=punix:/usr/local/var/run/openvswitch/db.sock \
@@ -446,8 +401,8 @@ to use the SSL configuration in the database::
         --pidfile --detach --log-file
 
 .. note::
-  If you built Open vSwitch without SSL support, then omit ``--private-key``,
-  ``--certificate``, and ``--bootstrap-ca-cert``.)
+  If you built Open vSwitch without SSL/TLS support, then omit
+  ``--private-key``, ``--certificate``, and ``--bootstrap-ca-cert``.)
 
 Initialize the database using ovs-vsctl. This is only necessary the first time
 after you create the database with ovsdb-tool, though running it at any time is

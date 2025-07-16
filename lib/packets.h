@@ -736,6 +736,8 @@ IP_ECN_is_ce(uint8_t dsfield)
 #define IP_FRAG_OFF_MASK  0x1fff /* Fragment offset. */
 #define IP_IS_FRAGMENT(ip_frag_off) \
         ((ip_frag_off) & htons(IP_MORE_FRAGMENTS | IP_FRAG_OFF_MASK))
+#define IP_IS_LATER_FRAG(ip_frag_off) \
+        ((ip_frag_off) & htons(IP_FRAG_OFF_MASK))
 
 #define IP_HEADER_LEN 20
 struct ip_header {
@@ -977,6 +979,8 @@ union ovs_16aligned_in6_addr {
     ovs_be16 be16[8];
     ovs_16aligned_be32 be32[4];
 };
+BUILD_ASSERT_DECL(sizeof(union ovs_16aligned_in6_addr)
+                  == sizeof(struct in6_addr));
 
 /* Like struct ip6_hdr, but whereas that struct requires 32-bit alignment, this
  * one only requires 16-bit alignment. */
@@ -1635,6 +1639,7 @@ void packet_set_ipv6_addr(struct dp_packet *packet, uint8_t proto,
                           bool recalculate_csum);
 void packet_set_ipv6_flow_label(ovs_16aligned_be32 *flow_label,
                                 ovs_be32 flow_key);
+void packet_set_ipv6_tc(ovs_16aligned_be32 *flow_label, uint8_t tc);
 void packet_set_tcp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_udp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_sctp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);

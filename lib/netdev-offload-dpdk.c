@@ -283,7 +283,7 @@ ufid_to_rte_flow_disassociate(struct ufid_to_rte_flow_data *data)
 }
 
 /*
- * To avoid individual xrealloc calls for each new element, a 'curent_max'
+ * To avoid individual xrealloc calls for each new element, a 'current_max'
  * is used to keep track of current allocated number of elements. Starts
  * by 8 and doubles on each xrealloc call.
  */
@@ -495,6 +495,23 @@ dump_flow_pattern(struct ds *s,
                               icmp_mask->hdr.icmp_code, 0);
         }
         ds_put_cstr(s, "/ ");
+    } else if (item->type == RTE_FLOW_ITEM_TYPE_ICMP6) {
+        const struct rte_flow_item_icmp6 *icmp6_spec = item->spec;
+        const struct rte_flow_item_icmp6 *icmp6_mask = item->mask;
+
+        ds_put_cstr(s, "icmpv6 ");
+        if (icmp6_spec) {
+            if (!icmp6_mask) {
+                icmp6_mask = &rte_flow_item_icmp6_mask;
+            }
+            DUMP_PATTERN_ITEM(icmp6_mask->type, false, "type",
+                              "%"PRIu8, icmp6_spec->type,
+                              icmp6_mask->type, 0);
+            DUMP_PATTERN_ITEM(icmp6_mask->code, false, "code",
+                              "%"PRIu8, icmp6_spec->code,
+                              icmp6_mask->code, 0);
+        }
+        ds_put_cstr(s, "/ ");
     } else if (item->type == RTE_FLOW_ITEM_TYPE_TCP) {
         const struct rte_flow_item_tcp *tcp_spec = item->spec;
         const struct rte_flow_item_tcp *tcp_mask = item->mask;
@@ -530,15 +547,15 @@ dump_flow_pattern(struct ds *s,
             if (!ipv6_mask) {
                 ipv6_mask = &rte_flow_item_ipv6_mask;
             }
-            memcpy(&addr, ipv6_spec->hdr.src_addr, sizeof addr);
-            memcpy(&mask, ipv6_mask->hdr.src_addr, sizeof mask);
+            memcpy(&addr, &ipv6_spec->hdr.src_addr, sizeof addr);
+            memcpy(&mask, &ipv6_mask->hdr.src_addr, sizeof mask);
             ipv6_string_mapped(addr_str, &addr);
             ipv6_string_mapped(mask_str, &mask);
             DUMP_PATTERN_ITEM(mask, false, "src", "%s",
                               addr_str, mask_str, "");
 
-            memcpy(&addr, ipv6_spec->hdr.dst_addr, sizeof addr);
-            memcpy(&mask, ipv6_mask->hdr.dst_addr, sizeof mask);
+            memcpy(&addr, &ipv6_spec->hdr.dst_addr, sizeof addr);
+            memcpy(&mask, &ipv6_mask->hdr.dst_addr, sizeof mask);
             ipv6_string_mapped(addr_str, &addr);
             ipv6_string_mapped(mask_str, &mask);
             DUMP_PATTERN_ITEM(mask, false, "dst", "%s",
@@ -695,10 +712,10 @@ dump_vxlan_encap(struct ds *s, const struct rte_flow_item *items)
         struct in6_addr addr;
 
         ds_put_cstr(s, "ip-src ");
-        memcpy(&addr, ipv6->hdr.src_addr, sizeof addr);
+        memcpy(&addr, &ipv6->hdr.src_addr, sizeof addr);
         ipv6_format_mapped(&addr, s);
         ds_put_cstr(s, " ip-dst ");
-        memcpy(&addr, ipv6->hdr.dst_addr, sizeof addr);
+        memcpy(&addr, &ipv6->hdr.dst_addr, sizeof addr);
         ipv6_format_mapped(&addr, s);
         ds_put_cstr(s, " ");
     }
@@ -834,7 +851,7 @@ dump_flow_action(struct ds *s, struct ds *s_extra,
             struct in6_addr addr;
 
             ds_put_cstr(s, "ipv6_addr ");
-            memcpy(&addr, set_ipv6->ipv6_addr, sizeof addr);
+            memcpy(&addr, &set_ipv6->ipv6_addr, sizeof addr);
             ipv6_format_addr(&addr, s);
             ds_put_cstr(s, " ");
         }
@@ -919,24 +936,19 @@ netdev_offload_dpdk_flow_create(struct netdev *netdev,
         if (!VLOG_DROP_DBG(&rl)) {
             dump_flow(&s, &s_extra, attr, flow_patterns, flow_actions);
             extra_str = ds_cstr(&s_extra);
-            VLOG_DBG_RL(&rl, "%s: rte_flow 0x%"PRIxPTR" %s  flow create %d %s",
-                        netdev_get_name(netdev), (intptr_t) flow, extra_str,
-                        netdev_dpdk_get_port_id(netdev), ds_cstr(&s));
+            VLOG_DBG("%s: rte_flow creation succeeded: rte_flow 0x%"PRIxPTR" "
+                     "%s  flow create %d %s", netdev_get_name(netdev),
+                     (intptr_t) flow, extra_str,
+                     netdev_dpdk_get_port_id(netdev), ds_cstr(&s));
         }
     } else {
-        enum vlog_level level = VLL_WARN;
-
-        if (error->type == RTE_FLOW_ERROR_TYPE_ACTION) {
-            level = VLL_DBG;
-        }
-        VLOG_RL(&rl, level, "%s: rte_flow creation failed: %d (%s).",
-                netdev_get_name(netdev), error->type, error->message);
-        if (!vlog_should_drop(&this_module, level, &rl)) {
+        if (!VLOG_DROP_DBG(&rl)) {
             dump_flow(&s, &s_extra, attr, flow_patterns, flow_actions);
             extra_str = ds_cstr(&s_extra);
-            VLOG_RL(&rl, level, "%s: Failed flow: %s  flow create %d %s",
-                    netdev_get_name(netdev), extra_str,
-                    netdev_dpdk_get_port_id(netdev), ds_cstr(&s));
+            VLOG_DBG("%s: rte_flow creation failed [%d (%s)]: "
+                     "%s  flow create %d %s", netdev_get_name(netdev),
+                     error->type, error->message, extra_str,
+                     netdev_dpdk_get_port_id(netdev), ds_cstr(&s));
         }
     }
     ds_destroy(&s);
@@ -1215,18 +1227,18 @@ parse_tnl_ip_match(struct flow_patterns *patterns,
         spec->hdr.hop_limits = match->flow.tunnel.ip_ttl;
         spec->hdr.vtc_flow = htonl((uint32_t) match->flow.tunnel.ip_tos <<
                                    RTE_IPV6_HDR_TC_SHIFT);
-        memcpy(spec->hdr.src_addr, &match->flow.tunnel.ipv6_src,
+        memcpy(&spec->hdr.src_addr, &match->flow.tunnel.ipv6_src,
                sizeof spec->hdr.src_addr);
-        memcpy(spec->hdr.dst_addr, &match->flow.tunnel.ipv6_dst,
+        memcpy(&spec->hdr.dst_addr, &match->flow.tunnel.ipv6_dst,
                sizeof spec->hdr.dst_addr);
 
         mask->hdr.proto = UINT8_MAX;
         mask->hdr.hop_limits = match->wc.masks.tunnel.ip_ttl;
         mask->hdr.vtc_flow = htonl((uint32_t) match->wc.masks.tunnel.ip_tos <<
                                    RTE_IPV6_HDR_TC_SHIFT);
-        memcpy(mask->hdr.src_addr, &match->wc.masks.tunnel.ipv6_src,
+        memcpy(&mask->hdr.src_addr, &match->wc.masks.tunnel.ipv6_src,
                sizeof mask->hdr.src_addr);
-        memcpy(mask->hdr.dst_addr, &match->wc.masks.tunnel.ipv6_dst,
+        memcpy(&mask->hdr.dst_addr, &match->wc.masks.tunnel.ipv6_dst,
                sizeof mask->hdr.dst_addr);
 
         consumed_masks->tunnel.ip_tos = 0;
@@ -1537,9 +1549,9 @@ parse_flow_match(struct netdev *netdev,
         spec->hdr.hop_limits = match->flow.nw_ttl;
         spec->hdr.vtc_flow =
             htonl((uint32_t) match->flow.nw_tos << RTE_IPV6_HDR_TC_SHIFT);
-        memcpy(spec->hdr.src_addr, &match->flow.ipv6_src,
+        memcpy(&spec->hdr.src_addr, &match->flow.ipv6_src,
                sizeof spec->hdr.src_addr);
-        memcpy(spec->hdr.dst_addr, &match->flow.ipv6_dst,
+        memcpy(&spec->hdr.dst_addr, &match->flow.ipv6_dst,
                sizeof spec->hdr.dst_addr);
         if ((match->wc.masks.nw_frag & FLOW_NW_FRAG_ANY)
             && (match->flow.nw_frag & FLOW_NW_FRAG_ANY)) {
@@ -1550,9 +1562,9 @@ parse_flow_match(struct netdev *netdev,
         mask->hdr.hop_limits = match->wc.masks.nw_ttl;
         mask->hdr.vtc_flow =
             htonl((uint32_t) match->wc.masks.nw_tos << RTE_IPV6_HDR_TC_SHIFT);
-        memcpy(mask->hdr.src_addr, &match->wc.masks.ipv6_src,
+        memcpy(&mask->hdr.src_addr, &match->wc.masks.ipv6_src,
                sizeof mask->hdr.src_addr);
-        memcpy(mask->hdr.dst_addr, &match->wc.masks.ipv6_dst,
+        memcpy(&mask->hdr.dst_addr, &match->wc.masks.ipv6_dst,
                sizeof mask->hdr.dst_addr);
 
         consumed_masks->nw_ttl = 0;
@@ -1613,6 +1625,7 @@ parse_flow_match(struct netdev *netdev,
 
     if (proto != IPPROTO_ICMP && proto != IPPROTO_UDP  &&
         proto != IPPROTO_SCTP && proto != IPPROTO_TCP  &&
+        proto != IPPROTO_ICMPV6 &&
         (match->wc.masks.tp_src ||
          match->wc.masks.tp_dst ||
          match->wc.masks.tcp_flags)) {
@@ -1689,6 +1702,22 @@ parse_flow_match(struct netdev *netdev,
         consumed_masks->tp_dst = 0;
 
         add_flow_pattern(patterns, RTE_FLOW_ITEM_TYPE_ICMP, spec, mask, NULL);
+    } else if (proto == IPPROTO_ICMPV6) {
+        struct rte_flow_item_icmp6 *spec, *mask;
+
+        spec = xzalloc(sizeof *spec);
+        mask = xzalloc(sizeof *mask);
+
+        spec->type = (uint8_t) ntohs(match->flow.tp_src);
+        spec->code = (uint8_t) ntohs(match->flow.tp_dst);
+
+        mask->type = (uint8_t) ntohs(match->wc.masks.tp_src);
+        mask->code = (uint8_t) ntohs(match->wc.masks.tp_dst);
+
+        consumed_masks->tp_src = 0;
+        consumed_masks->tp_dst = 0;
+
+        add_flow_pattern(patterns, RTE_FLOW_ITEM_TYPE_ICMP6, spec, mask, NULL);
     }
 
     add_flow_pattern(patterns, RTE_FLOW_ITEM_TYPE_END, NULL, NULL, NULL);
@@ -2046,9 +2075,9 @@ err:
     return -1;
 }
 
-static int
-parse_vlan_push_action(struct flow_actions *actions,
-                       const struct ovs_action_push_vlan *vlan_push)
+static void
+add_vlan_push_action(struct flow_actions *actions,
+                     const struct ovs_action_push_vlan *vlan_push)
 {
     struct rte_flow_action_of_push_vlan *rte_push_vlan;
     struct rte_flow_action_of_set_vlan_pcp *rte_vlan_pcp;
@@ -2067,7 +2096,6 @@ parse_vlan_push_action(struct flow_actions *actions,
     rte_vlan_vid->vlan_vid = htons(vlan_tci_to_vid(vlan_push->vlan_tci));
     add_flow_action(actions, RTE_FLOW_ACTION_TYPE_OF_SET_VLAN_VID,
                     rte_vlan_vid);
-    return 0;
 }
 
 static void
@@ -2108,6 +2136,9 @@ parse_clone_actions(struct netdev *netdev,
             if (add_output_action(netdev, actions, ca)) {
                 return -1;
             }
+        } else if (clone_type == OVS_ACTION_ATTR_PUSH_VLAN) {
+            const struct ovs_action_push_vlan *vlan = nl_attr_get(ca);
+            add_vlan_push_action(actions, vlan);
         } else {
             VLOG_DBG_RL(&rl,
                         "Unsupported nested action inside clone(), "
@@ -2201,9 +2232,7 @@ parse_flow_actions(struct netdev *netdev,
         } else if (nl_attr_type(nla) == OVS_ACTION_ATTR_PUSH_VLAN) {
             const struct ovs_action_push_vlan *vlan = nl_attr_get(nla);
 
-            if (parse_vlan_push_action(actions, vlan)) {
-                return -1;
-            }
+            add_vlan_push_action(actions, vlan);
         } else if (nl_attr_type(nla) == OVS_ACTION_ATTR_POP_VLAN) {
             add_flow_action(actions, RTE_FLOW_ACTION_TYPE_OF_POP_VLAN, NULL);
         } else if (nl_attr_type(nla) == OVS_ACTION_ATTR_TUNNEL_PUSH) {

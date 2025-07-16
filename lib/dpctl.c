@@ -738,8 +738,8 @@ show_dpif(struct dpif *dpif, struct dpctl_params *dpctl_p)
                 continue;
             }
             error = netdev_get_stats(netdev, &s);
+            netdev_close(netdev);
             if (!error) {
-                netdev_close(netdev);
                 print_stat(dpctl_p, "    RX packets:", s.rx_packets);
                 print_stat(dpctl_p, " errors:", s.rx_errors);
                 print_stat(dpctl_p, " dropped:", s.rx_dropped);
@@ -877,7 +877,7 @@ format_dpif_flow(struct ds *ds, const struct dpif_flow *f, struct hmap *ports,
         ds_put_cstr(ds, ", ");
     }
     odp_flow_format(f->key, f->key_len, f->mask, f->mask_len, ports, ds,
-                    dpctl_p->verbosity);
+                    dpctl_p->verbosity, false);
     ds_put_cstr(ds, ", ");
 
     dpif_flow_stats_format(&f->stats, ds);
@@ -1359,19 +1359,17 @@ static int
 dpctl_del_flow_dpif(struct dpif *dpif, const char *key_s,
                     struct dpctl_params *dpctl_p)
 {
-    struct dpif_flow_stats stats;
-    struct dpif_port dpif_port;
     struct dpif_port_dump port_dump;
-    struct ofpbuf key;
-    struct ofpbuf mask; /* To be ignored. */
-
-    ovs_u128 ufid;
-    bool ufid_generated;
-    bool ufid_present;
+    struct dpif_flow_stats stats;
+    bool ufid_generated = false;
+    struct dpif_port dpif_port;
+    bool ufid_present = false;
     struct simap port_names;
+    struct ofpbuf mask; /* To be ignored. */
+    struct ofpbuf key;
+    ovs_u128 ufid;
     int n, error;
 
-    ufid_present = false;
     n = odp_ufid_from_string(key_s, &ufid);
     if (n < 0) {
         dpctl_error(dpctl_p, -n, "parsing flow ufid");
@@ -2168,20 +2166,28 @@ static int
 dpctl_ct_set_limits(int argc, const char *argv[],
                     struct dpctl_params *dpctl_p)
 {
-    struct dpif *dpif;
-    struct ds ds = DS_EMPTY_INITIALIZER;
-    int i =  dp_arg_exists(argc, argv) ? 2 : 1;
-    uint32_t default_limit;
     struct ovs_list zone_limits = OVS_LIST_INITIALIZER(&zone_limits);
+    int i =  dp_arg_exists(argc, argv) ? 2 : 1;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    unsigned long long default_limit;
+    struct dpif *dpif = NULL;
+    int error;
 
-    int error = opt_dpif_open(argc, argv, dpctl_p, INT_MAX, &dpif);
+    if (i >= argc) {
+        ds_put_cstr(&ds, "too few arguments");
+        error = EINVAL;
+        goto error;
+    }
+
+    error = opt_dpif_open(argc, argv, dpctl_p, INT_MAX, &dpif);
     if (error) {
         return error;
     }
 
     /* Parse default limit */
     if (!strncmp(argv[i], "default=", 8)) {
-        if (ovs_scan(argv[i], "default=%"SCNu32, &default_limit)) {
+        if (str_to_ullong(argv[i] + 8, 10, &default_limit) &&
+            default_limit <= UINT32_MAX) {
             ct_dpif_push_zone_limit(&zone_limits, OVS_ZONE_LIMIT_DEFAULT_ZONE,
                                     default_limit, 0);
             i++;
@@ -2261,11 +2267,17 @@ static int
 dpctl_ct_del_limits(int argc, const char *argv[],
                     struct dpctl_params *dpctl_p)
 {
-    struct dpif *dpif;
-    struct ds ds = DS_EMPTY_INITIALIZER;
-    int error;
-    int i =  dp_arg_exists(argc, argv) ? 2 : 1;
     struct ovs_list zone_limits = OVS_LIST_INITIALIZER(&zone_limits);
+    int i =  dp_arg_exists(argc, argv) ? 2 : 1;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    struct dpif *dpif = NULL;
+    int error;
+
+    if (i >= argc) {
+        ds_put_cstr(&ds, "too few arguments");
+        error = EINVAL;
+        goto error;
+    }
 
     error = opt_dpif_open(argc, argv, dpctl_p, 4, &dpif);
     if (error) {
@@ -2872,7 +2884,7 @@ dpctl_normalize_actions(int argc, const char *argv[],
 
     ds_clear(&s);
     odp_flow_format(keybuf.data, keybuf.size, NULL, 0, NULL,
-                    &s, dpctl_p->verbosity);
+                    &s, dpctl_p->verbosity, false);
     dpctl_print(dpctl_p, "input flow: %s\n", ds_cstr(&s));
 
     error = odp_flow_key_to_flow(keybuf.data, keybuf.size, &flow, &error_s);

@@ -1129,15 +1129,15 @@ packet_set_ipv4_addr(struct dp_packet *packet,
     pkt_metadata_init_conn(&packet->md);
 
     if (nh->ip_proto == IPPROTO_TCP && l4_size >= TCP_HEADER_LEN) {
-        if (dp_packet_hwol_l4_is_tcp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_checksum_set_partial(packet);
         } else {
             struct tcp_header *th = dp_packet_l4(packet);
             th->tcp_csum = recalc_csum32(th->tcp_csum, old_addr, new_addr);
         }
     } else if (nh->ip_proto == IPPROTO_UDP && l4_size >= UDP_HEADER_LEN ) {
-        if (dp_packet_hwol_l4_is_udp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_checksum_set_partial(packet);
         } else {
             struct udp_header *uh = dp_packet_l4(packet);
             if (uh->udp_csum) {
@@ -1149,8 +1149,8 @@ packet_set_ipv4_addr(struct dp_packet *packet,
         }
     }
 
-    if (dp_packet_hwol_l3_ipv4(packet)) {
-        dp_packet_ol_reset_ip_csum_good(packet);
+    if (dp_packet_ip_checksum_valid(packet)) {
+        dp_packet_ip_checksum_set_partial(packet);
     } else {
         nh->ip_csum = recalc_csum32(nh->ip_csum, old_addr, new_addr);
     }
@@ -1250,16 +1250,16 @@ packet_update_csum128(struct dp_packet *packet, uint8_t proto,
     size_t l4_size = dp_packet_l4_size(packet);
 
     if (proto == IPPROTO_TCP && l4_size >= TCP_HEADER_LEN) {
-        if (dp_packet_hwol_l4_is_tcp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_checksum_set_partial(packet);
         } else {
             struct tcp_header *th = dp_packet_l4(packet);
 
             th->tcp_csum = recalc_csum128(th->tcp_csum, addr, new_addr);
         }
     } else if (proto == IPPROTO_UDP && l4_size >= UDP_HEADER_LEN) {
-        if (dp_packet_hwol_l4_is_udp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_checksum_set_partial(packet);
         } else {
             struct udp_header *uh = dp_packet_l4(packet);
 
@@ -1299,7 +1299,7 @@ packet_set_ipv6_flow_label(ovs_16aligned_be32 *flow_label, ovs_be32 flow_key)
     put_16aligned_be32(flow_label, new_label);
 }
 
-static void
+void
 packet_set_ipv6_tc(ovs_16aligned_be32 *flow_label, uint8_t tc)
 {
     ovs_be32 old_label = get_16aligned_be32(flow_label);
@@ -1328,8 +1328,8 @@ packet_set_ipv4(struct dp_packet *packet, ovs_be32 src, ovs_be32 dst,
     if (nh->ip_tos != tos) {
         uint8_t *field = &nh->ip_tos;
 
-        if (dp_packet_hwol_l3_ipv4(packet)) {
-            dp_packet_ol_reset_ip_csum_good(packet);
+        if (dp_packet_ip_checksum_valid(packet)) {
+            dp_packet_ip_checksum_set_partial(packet);
         } else {
             nh->ip_csum = recalc_csum16(nh->ip_csum, htons((uint16_t) *field),
                                         htons((uint16_t) tos));
@@ -1341,8 +1341,8 @@ packet_set_ipv4(struct dp_packet *packet, ovs_be32 src, ovs_be32 dst,
     if (nh->ip_ttl != ttl) {
         uint8_t *field = &nh->ip_ttl;
 
-        if (dp_packet_hwol_l3_ipv4(packet)) {
-            dp_packet_ol_reset_ip_csum_good(packet);
+        if (dp_packet_ip_checksum_valid(packet)) {
+            dp_packet_ip_checksum_set_partial(packet);
         } else {
             nh->ip_csum = recalc_csum16(nh->ip_csum, htons(*field << 8),
                                         htons(ttl << 8));
@@ -1403,8 +1403,8 @@ packet_set_tcp_port(struct dp_packet *packet, ovs_be16 src, ovs_be16 dst)
     struct tcp_header *th = dp_packet_l4(packet);
     ovs_be16 *csum = NULL;
 
-    if (dp_packet_hwol_l4_is_tcp(packet)) {
-        dp_packet_ol_reset_l4_csum_good(packet);
+    if (dp_packet_l4_checksum_valid(packet)) {
+        dp_packet_l4_checksum_set_partial(packet);
     } else {
         csum = &th->tcp_csum;
     }
@@ -1422,8 +1422,8 @@ packet_set_udp_port(struct dp_packet *packet, ovs_be16 src, ovs_be16 dst)
 {
     struct udp_header *uh = dp_packet_l4(packet);
 
-    if (dp_packet_hwol_l4_is_udp(packet)) {
-        dp_packet_ol_reset_l4_csum_good(packet);
+    if (dp_packet_l4_checksum_valid(packet)) {
+        dp_packet_l4_checksum_set_partial(packet);
         packet_set_port(&uh->udp_src, src, NULL);
         packet_set_port(&uh->udp_dst, dst, NULL);
     } else {
@@ -1448,8 +1448,8 @@ packet_set_sctp_port(struct dp_packet *packet, ovs_be16 src, ovs_be16 dst)
 {
     struct sctp_header *sh = dp_packet_l4(packet);
 
-    if (dp_packet_hwol_l4_is_sctp(packet)) {
-        dp_packet_ol_reset_l4_csum_good(packet);
+    if (dp_packet_l4_checksum_valid(packet)) {
+        dp_packet_l4_checksum_set_partial(packet);
         sh->sctp_src = src;
         sh->sctp_dst = dst;
     } else {
@@ -1979,8 +1979,8 @@ IP_ECN_set_ce(struct dp_packet *pkt, bool is_ipv6)
 
         tos |= IP_ECN_CE;
         if (nh->ip_tos != tos) {
-            if (dp_packet_hwol_l3_ipv4(pkt)) {
-                dp_packet_ol_reset_ip_csum_good(pkt);
+            if (dp_packet_ip_checksum_valid(pkt)) {
+                dp_packet_ip_checksum_set_partial(pkt);
             } else {
                 nh->ip_csum = recalc_csum16(nh->ip_csum, htons(nh->ip_tos),
                                             htons((uint16_t) tos));
@@ -1999,7 +1999,6 @@ packet_tcp_complete_csum(struct dp_packet *p, bool inner)
     struct tcp_header *tcp;
     size_t tcp_sz;
     void *ip_hdr;
-    bool is_v4;
 
     if (inner) {
         tcp = dp_packet_inner_l4(p);
@@ -2011,20 +2010,11 @@ packet_tcp_complete_csum(struct dp_packet *p, bool inner)
         tcp_sz = dp_packet_l4_size(p);
     }
 
-    if (!inner && dp_packet_hwol_is_outer_ipv6(p)) {
-        is_v4 = false;
-    } else if (!inner && dp_packet_hwol_is_outer_ipv4(p)) {
-        is_v4 = true;
-    } else if (dp_packet_hwol_is_ipv4(p)) {
-        is_v4 = true;
-    } else if (dp_packet_hwol_tx_ipv6(p)) {
-        is_v4 = false;
-    } else {
-        OVS_NOT_REACHED();
-    }
+    ovs_assert(tcp);
+    ovs_assert(ip_hdr);
 
     tcp->tcp_csum = 0;
-    if (is_v4) {
+    if (IP_VER(((const struct ip_header *) ip_hdr)->ip_ihl_ver) == 4) {
         struct ip_header *ip = ip_hdr;
 
         tcp->tcp_csum = csum_finish(csum_continue(packet_csum_pseudoheader(ip),
@@ -2034,6 +2024,12 @@ packet_tcp_complete_csum(struct dp_packet *p, bool inner)
 
         tcp->tcp_csum = packet_csum_upperlayer6(ip6, tcp, ip6->ip6_nxt,
                                                 tcp_sz);
+    }
+
+    if (inner) {
+        dp_packet_inner_l4_checksum_set_good(p);
+    } else {
+        dp_packet_l4_checksum_set_good(p);
     }
 }
 
@@ -2045,7 +2041,6 @@ packet_udp_complete_csum(struct dp_packet *p, bool inner)
     struct udp_header *udp;
     size_t udp_sz;
     void *ip_hdr;
-    bool is_v4;
 
     if (inner) {
         udp = dp_packet_inner_l4(p);
@@ -2057,25 +2052,16 @@ packet_udp_complete_csum(struct dp_packet *p, bool inner)
         udp_sz = dp_packet_l4_size(p);
     }
 
+    ovs_assert(udp);
+    ovs_assert(ip_hdr);
+
     /* Skip csum calculation if the udp_csum is zero. */
     if (!udp->udp_csum) {
-        return;
-    }
-
-    if (!inner && dp_packet_hwol_is_outer_ipv6(p)) {
-        is_v4 = false;
-    } else if (!inner && dp_packet_hwol_is_outer_ipv4(p)) {
-        is_v4 = true;
-    } else if (dp_packet_hwol_is_ipv4(p)) {
-        is_v4 = true;
-    } else if (dp_packet_hwol_tx_ipv6(p)) {
-        is_v4 = false;
-    } else {
-        OVS_NOT_REACHED();
+        goto out;
     }
 
     udp->udp_csum = 0;
-    if (is_v4) {
+    if (IP_VER(((const struct ip_header *) ip_hdr)->ip_ihl_ver) == 4) {
         struct ip_header *ip = ip_hdr;
 
         udp->udp_csum = csum_finish(csum_continue(packet_csum_pseudoheader(ip),
@@ -2089,6 +2075,13 @@ packet_udp_complete_csum(struct dp_packet *p, bool inner)
 
     if (!udp->udp_csum) {
         udp->udp_csum = htons(0xffff);
+    }
+
+out:
+    if (inner) {
+        dp_packet_inner_l4_checksum_set_good(p);
+    } else {
+        dp_packet_l4_checksum_set_good(p);
     }
 }
 
@@ -2109,7 +2102,15 @@ packet_sctp_complete_csum(struct dp_packet *p, bool inner)
         tp_len = dp_packet_l4_size(p);
     }
 
+    ovs_assert(sh);
+
     put_16aligned_be32(&sh->sctp_csum, 0);
     csum = crc32c((void *) sh, tp_len);
     put_16aligned_be32(&sh->sctp_csum, csum);
+
+    if (inner) {
+        dp_packet_inner_l4_checksum_set_good(p);
+    } else {
+        dp_packet_l4_checksum_set_good(p);
+    }
 }

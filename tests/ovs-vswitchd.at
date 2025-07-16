@@ -222,7 +222,11 @@ cat >experr <<EOF
 ovs-vsctl: Error detected while setting up 'b/c'.  See ovs-vswitchd log for details.
 ovs-vsctl: The default log directory is "$OVS_RUNDIR".
 EOF
-AT_CHECK([ovs-vsctl add-br b/c -- set bridge b/c datapath-type=dummy], [0], [], [experr])
+if test "$IS_WIN32" = "yes"; then
+AT_CHECK([ovs-vsctl add-br b/c -- set bridge b/c datapath-type=dummy], [160], [], [experr])
+else
+AT_CHECK([ovs-vsctl add-br b/c -- set bridge b/c datapath-type=dummy], [65], [], [experr])
+fi
 AT_CHECK([test ! -e b/c.mgmt])
 
 OVS_VSWITCHD_STOP(['/ignoring bridge with invalid name/d'])
@@ -264,4 +268,37 @@ OFPT_FEATURES_REPLY: dpid:$orig_dpid
 ])
 
 OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ovs-vswitchd version])
+OVS_VSWITCHD_START
+
+AT_CHECK([ovs-appctl version], [0], [ignore])
+ovs_version=$(ovs-appctl version)
+
+AT_CHECK_UNQUOTED([ovs-appctl --format json version], [0], [dnl
+{"reply":"$ovs_version","reply-format":"plain"}
+])
+
+AT_CHECK_UNQUOTED([ovs-appctl --format json --pretty version], [0], [dnl
+{
+  "reply": "$ovs_version",
+  "reply-format": "plain"}
+])
+
+AT_CLEANUP
+
+AT_SETUP([ovs-vswitchd list-commands])
+OVS_VSWITCHD_START
+
+AT_CHECK([ovs-appctl list-commands], [0], [ignore])
+AT_CHECK([ovs-appctl --format json list-commands], [0], [stdout])
+
+# Check that ovs-appctl prints a single line with a trailing newline.
+AT_CHECK([wc -l stdout], [0], [1 stdout
+])
+
+# Check that ovs-appctl prints a JSON document.
+AT_CHECK([ovstest test-json stdout], [0], [ignore])
+
 AT_CLEANUP

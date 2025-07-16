@@ -119,7 +119,15 @@ class ODPFlow(Flow):
         ]
 
         action_pos += 8  # len("actions:")
-        actions = odp_string[action_pos:]
+
+        dp_extra_pos = odp_string[action_pos:].find("dp-extra-info")
+        if dp_extra_pos > 0:
+            dp_extra_pos += action_pos
+            actions = odp_string[action_pos : dp_extra_pos]
+            dp_extra_pos += 14  # len("dp-extra-info:")
+            dp_extra = odp_string[dp_extra_pos :]
+        else:
+            actions = odp_string[action_pos:]
 
         field_parts = rest.lstrip(" ").partition(" ")
 
@@ -160,6 +168,19 @@ class ODPFlow(Flow):
         )
         sections.append(asection)
 
+        if dp_extra_pos > 0:
+            dparser = KVParser(
+                dp_extra, KVDecoders({"miniflow_bits": decode_default})
+            )
+            dparser.parse()
+            dsection = Section(
+                name="dp_extra_info",
+                pos=dp_extra_pos,
+                string=dp_extra,
+                data=dparser.kv(),
+            )
+            sections.append(dsection)
+
         super(ODPFlow, self).__init__(sections, odp_string, id)
 
     def __str__(self):
@@ -190,6 +211,7 @@ class ODPFlow(Flow):
             "used": decode_time,
             "flags": decode_default,
             "dp": decode_default,
+            "offloaded": decode_default,
         }
 
     @staticmethod
@@ -343,6 +365,14 @@ class ODPFlow(Flow):
                     }
                 )
             ),
+            "psample": nested_kv_decoder(
+                KVDecoders(
+                    {
+                        "group": decode_int,
+                        "cookie": decode_default,
+                    }
+                )
+            )
         }
 
         _decoders["sample"] = nested_kv_decoder(
@@ -365,29 +395,30 @@ class ODPFlow(Flow):
             is_list=True,
         )
 
+        _decoders["check_pkt_len"] = nested_kv_decoder(
+            KVDecoders(
+                {
+                    "size": decode_int,
+                    "gt": nested_kv_decoder(
+                        KVDecoders(
+                            decoders=_decoders,
+                            default_free=decode_free_output,
+                        ),
+                        is_list=True,
+                    ),
+                    "le": nested_kv_decoder(
+                        KVDecoders(
+                            decoders=_decoders,
+                            default_free=decode_free_output,
+                        ),
+                        is_list=True,
+                    ),
+                }
+            )
+        )
+
         return {
             **_decoders,
-            "check_pkt_len": nested_kv_decoder(
-                KVDecoders(
-                    {
-                        "size": decode_int,
-                        "gt": nested_kv_decoder(
-                            KVDecoders(
-                                decoders=_decoders,
-                                default_free=decode_free_output,
-                            ),
-                            is_list=True,
-                        ),
-                        "le": nested_kv_decoder(
-                            KVDecoders(
-                                decoders=_decoders,
-                                default_free=decode_free_output,
-                            ),
-                            is_list=True,
-                        ),
-                    }
-                )
-            ),
         }
 
     @staticmethod

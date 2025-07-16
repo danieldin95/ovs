@@ -32,6 +32,7 @@
 
 #include <stdio.h>
 #include "openvswitch/shash.h"
+#include "openvswitch/util.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -59,20 +60,45 @@ const char *json_type_to_string(enum json_type);
 
 /* A JSON array. */
 struct json_array {
-    size_t n, n_allocated;
-    struct json **elems;
+    size_t size, allocated;
+    struct json **elements;
+};
+
+/* Maximum string length that can be stored inline ('\0' is not included). */
+#define JSON_STRING_INLINE_LEN (sizeof(struct json_array) - 1)
+
+#define JSON_ARRAY_INLINE_LEN 3
+BUILD_ASSERT_DECL(sizeof(struct json_array) / sizeof(struct json *)
+                    >= JSON_ARRAY_INLINE_LEN);
+
+enum json_storage_type {
+    /* JSON_STRING storage types. */
+    JSON_STRING_DYNAMIC = 0, /* Stored via 'str_ptr'. */
+    JSON_STRING_INLINE,      /* Stored in 'str' array. */
+    /* JSON_ARRAY storage types.*/
+    JSON_ARRAY_DYNAMIC,      /* 'elements' is a dynamically allocated array. */
+    JSON_ARRAY_INLINE_1,     /* Static 'elements' with exactly 1 element. */
+    JSON_ARRAY_INLINE_2,     /* Static 'elements' with exactly 2 elements. */
+    JSON_ARRAY_INLINE_3,     /* Static 'elements' with exactly 3 elements. */
 };
 
 /* A JSON value. */
 struct json {
     enum json_type type;
+    enum json_storage_type storage_type;
     size_t count;
     union {
         struct shash *object;   /* Contains "struct json *"s. */
-        struct json_array array;
+        union {
+            struct json *elements[JSON_ARRAY_INLINE_LEN];
+            struct json_array array;
+        }; /* JSON_ARRAY. */
         long long int integer;
         double real;
-        char *string; /* JSON_STRING or JSON_SERIALIZED_OBJECT. */
+        union {
+            char str[JSON_STRING_INLINE_LEN + 1];
+            char *str_ptr;
+        }; /* JSON_STRING or JSON_SERIALIZED_OBJECT. */
     };
 };
 
@@ -80,12 +106,15 @@ struct json *json_null_create(void);
 struct json *json_boolean_create(bool);
 struct json *json_string_create(const char *);
 struct json *json_string_create_nocopy(char *);
+struct json *json_string_create_uuid(const struct uuid *);
 struct json *json_serialized_object_create(const struct json *);
 struct json *json_integer_create(long long int);
 struct json *json_real_create(double);
 
 struct json *json_array_create_empty(void);
 void json_array_add(struct json *, struct json *element);
+void json_array_set(struct json *, size_t index, struct json *element);
+struct json *json_array_pop(struct json *);
 void json_array_trim(struct json *);
 struct json *json_array_create(struct json **, size_t n);
 struct json *json_array_create_1(struct json *);
@@ -101,10 +130,13 @@ void json_object_put_string(struct json *,
 void json_object_put_format(struct json *,
                             const char *name, const char *format, ...)
     OVS_PRINTF_FORMAT(3, 4);
+void json_object_put_uuid(struct json *, const char *name,
+                          const struct uuid *);
 
 const char *json_string(const struct json *);
 const char *json_serialized_object(const struct json *);
-struct json_array *json_array(const struct json *);
+size_t json_array_size(const struct json *);
+const struct json *json_array_at(const struct json *, size_t index);
 struct shash *json_object(const struct json *);
 bool json_boolean(const struct json *);
 double json_real(const struct json *);

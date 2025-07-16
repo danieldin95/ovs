@@ -165,12 +165,11 @@
  * separate tries for subsets of rules separated by metadata fields.
  *
  * Prefix tracking is configured via OVSDB "Flow_Table" table,
- * "fieldspec" column.  "fieldspec" is a string map where a "prefix"
- * key tells which fields should be used for prefix tracking.  The
- * value of the "prefix" key is a comma separated list of field names.
+ * "prefixes" column.  "prefixes" is a string set where each element
+ * is a name of a field that should be used for prefix tracking.
  *
  * There is a maximum number of fields that can be enabled for any one
- * flow table.  Currently this limit is 3.
+ * flow table.  Currently this limit is 4.
  *
  *
  * Partitioning (Lookup Time and Wildcard Optimization)
@@ -315,20 +314,18 @@ extern "C" {
 struct cls_subtable;
 struct cls_match;
 
-struct mf_field;
-typedef OVSRCU_TYPE(struct mf_field *) rcu_field_ptr;
 struct trie_node;
 typedef OVSRCU_TYPE(struct trie_node *) rcu_trie_ptr;
 
 /* Prefix trie for a 'field' */
 struct cls_trie {
-    rcu_field_ptr field;   /* Trie field, or NULL. */
-    rcu_trie_ptr root;     /* NULL if none. */
+    const struct mf_field *field; /* Trie field, or NULL. */
+    rcu_trie_ptr root;            /* NULL if none. */
 };
 
 enum {
     CLS_MAX_INDICES = 3,   /* Maximum number of lookup indices per subtable. */
-    CLS_MAX_TRIES = 3      /* Maximum number of prefix trees per classifier. */
+    CLS_MAX_TRIES = 4,     /* Maximum number of prefix trees per classifier. */
 };
 
 /* A flow classifier. */
@@ -341,7 +338,9 @@ struct classifier {
     struct pvector subtables;
     struct cmap partitions;         /* Contains "struct cls_partition"s. */
     struct cls_trie tries[CLS_MAX_TRIES]; /* Prefix tries. */
-    unsigned int n_tries;
+    atomic_uint32_t n_tries;        /* Number of tries.  Also serves as a
+                                     * memory synchronization point for trie
+                                     * configuration. */
     bool publish;                   /* Make changes visible to lookups? */
 };
 

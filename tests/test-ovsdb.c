@@ -265,7 +265,7 @@ parse_json(const char *s)
 {
     struct json *json = json_from_string(s);
     if (json->type == JSON_STRING) {
-        ovs_fatal(0, "\"%s\": %s", s, json->string);
+        ovs_fatal(0, "\"%s\": %s", s, json_string(json));
     }
     return json;
 }
@@ -273,9 +273,8 @@ parse_json(const char *s)
 static struct json *
 unbox_json(struct json *json)
 {
-    if (json->type == JSON_ARRAY && json->array.n == 1) {
-        struct json *inner = json->array.elems[0];
-        json->array.elems[0] = NULL;
+    if (json->type == JSON_ARRAY && json_array_size(json) == 1) {
+        struct json *inner = json_array_pop(json);
         json_destroy(json);
         return inner;
     } else {
@@ -426,6 +425,7 @@ do_log_io(struct ovs_cmdl_context *ctx)
     }
 
     ovsdb_log_close(log);
+    ovsdb_log_close(replacement);
 }
 
 static void
@@ -787,11 +787,11 @@ do_sort_atoms(struct ovs_cmdl_context *ctx)
     }
 
     /* Convert JSON atoms to internal representation. */
-    n_atoms = json->array.n;
+    n_atoms = json_array_size(json);
     atoms = xmalloc(n_atoms * sizeof *atoms);
     for (i = 0; i < n_atoms; i++) {
         check_ovsdb_error(ovsdb_atom_from_json(&atoms[i], &base,
-                                               json->array.elems[i], NULL));
+                                               json_array_at(json, i), NULL));
     }
     json_destroy(json);
 
@@ -931,13 +931,13 @@ do_compare_rows(struct ovs_cmdl_context *ctx)
         rows[i] = ovsdb_row_create(table);
 
         json = parse_json(ctx->argv[i + 2]);
-        if (json->type != JSON_ARRAY || json->array.n != 2
-            || json->array.elems[0]->type != JSON_STRING) {
+        if (json->type != JSON_ARRAY || json_array_size(json) != 2
+            || json_array_at(json, 0)->type != JSON_STRING) {
             ovs_fatal(0, "\"%s\" does not have expected form "
                       "[\"name\", {data}]", ctx->argv[i]);
         }
-        names[i] = xstrdup(json->array.elems[0]->string);
-        check_ovsdb_error(ovsdb_row_from_json(rows[i], json->array.elems[1],
+        names[i] = xstrdup(json_string(json_array_at(json, 0)));
+        check_ovsdb_error(ovsdb_row_from_json(rows[i], json_array_at(json, 1),
                                               NULL, NULL, false));
         json_destroy(json);
     }
@@ -1033,10 +1033,10 @@ do_evaluate_condition__(struct ovs_cmdl_context *ctx, int mode)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "CONDITION argument is not JSON array");
     }
-    n_conditions = json->array.n;
+    n_conditions = json_array_size(json);
     conditions = xmalloc(n_conditions * sizeof *conditions);
     for (i = 0; i < n_conditions; i++) {
-        check_ovsdb_error(ovsdb_condition_from_json(ts, json->array.elems[i],
+        check_ovsdb_error(ovsdb_condition_from_json(ts, json_array_at(json, i),
                                                     NULL, &conditions[i]));
     }
     json_destroy(json);
@@ -1046,11 +1046,11 @@ do_evaluate_condition__(struct ovs_cmdl_context *ctx, int mode)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "ROW argument is not JSON array");
     }
-    n_rows = json->array.n;
+    n_rows = json_array_size(json);
     rows = xmalloc(n_rows * sizeof *rows);
     for (i = 0; i < n_rows; i++) {
         rows[i] = ovsdb_row_create(table);
-        check_ovsdb_error(ovsdb_row_from_json(rows[i], json->array.elems[i],
+        check_ovsdb_error(ovsdb_row_from_json(rows[i], json_array_at(json, i),
                                               NULL, NULL, false));
     }
     json_destroy(json);
@@ -1122,11 +1122,11 @@ do_compare_conditions(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "CONDITION argument is not JSON array");
     }
-    n_conditions = json->array.n;
+    n_conditions = json_array_size(json);
     conditions = xmalloc(n_conditions * sizeof *conditions);
 
     for (i = 0; i < n_conditions; i++) {
-        check_ovsdb_error(ovsdb_condition_from_json(ts, json->array.elems[i],
+        check_ovsdb_error(ovsdb_condition_from_json(ts, json_array_at(json, i),
                                                     NULL, &conditions[i]));
     }
     json_destroy(json);
@@ -1206,11 +1206,11 @@ do_execute_mutations(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "MUTATION argument is not JSON array");
     }
-    n_sets = json->array.n;
+    n_sets = json_array_size(json);
     sets = xmalloc(n_sets * sizeof *sets);
     for (i = 0; i < n_sets; i++) {
         check_ovsdb_error(ovsdb_mutation_set_from_json(ts,
-                                                       json->array.elems[i],
+                                                       json_array_at(json, i),
                                                        NULL, &sets[i]));
     }
     json_destroy(json);
@@ -1220,11 +1220,11 @@ do_execute_mutations(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "ROW argument is not JSON array");
     }
-    n_rows = json->array.n;
+    n_rows = json_array_size(json);
     rows = xmalloc(n_rows * sizeof *rows);
     for (i = 0; i < n_rows; i++) {
         rows[i] = ovsdb_row_create(table);
-        check_ovsdb_error(ovsdb_row_from_json(rows[i], json->array.elems[i],
+        check_ovsdb_error(ovsdb_row_from_json(rows[i], json_array_at(json, i),
                                               NULL, NULL, false));
     }
     json_destroy(json);
@@ -1277,13 +1277,22 @@ do_execute_mutations(struct ovs_cmdl_context *ctx)
     ovsdb_table_destroy(table); /* Also destroys 'ts'. */
 }
 
-/* Inserts a row, without bothering to update metadata such as refcounts. */
+/* Inserts a row and update the indexes, without bothering to update metadata
+ * such as refcounts. */
 static void
 put_row(struct ovsdb_table *table, struct ovsdb_row *row)
 {
     const struct uuid *uuid = ovsdb_row_get_uuid(row);
     if (!ovsdb_table_get_row(table, uuid)) {
         hmap_insert(&table->rows, &row->hmap_node, uuid_hash(uuid));
+    }
+
+    for (size_t i = 0; i < table->schema->n_indexes; i++) {
+        const struct ovsdb_column_set *index = &table->schema->indexes[i];
+        struct hmap_node *node = ovsdb_row_get_index_node(row, i);
+        uint32_t hash = ovsdb_row_hash_columns(row, index, 0);
+
+        hmap_insert(&table->indexes[i], node, hash);
     }
 }
 
@@ -1332,13 +1341,13 @@ do_query(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "ROW argument is not JSON array");
     }
-    cbdata.n_rows = json->array.n;
+    cbdata.n_rows = json_array_size(json);
     cbdata.row_uuids = xmalloc(cbdata.n_rows * sizeof *cbdata.row_uuids);
     cbdata.counts = xmalloc(cbdata.n_rows * sizeof *cbdata.counts);
     for (i = 0; i < cbdata.n_rows; i++) {
         struct ovsdb_row *row = ovsdb_row_create(table);
         uuid_generate(ovsdb_row_get_uuid_rw(row));
-        check_ovsdb_error(ovsdb_row_from_json(row, json->array.elems[i],
+        check_ovsdb_error(ovsdb_row_from_json(row, json_array_at(json, i),
                                               NULL, NULL, false));
         if (ovsdb_table_get_row(table, ovsdb_row_get_uuid(row))) {
             ovs_fatal(0, "duplicate UUID "UUID_FMT" in table",
@@ -1354,15 +1363,15 @@ do_query(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "CONDITION argument is not JSON array");
     }
-    for (i = 0; i < json->array.n; i++) {
+    for (i = 0; i < json_array_size(json); i++) {
         struct ovsdb_condition cnd;
         size_t j;
 
-        check_ovsdb_error(ovsdb_condition_from_json(ts, json->array.elems[i],
+        check_ovsdb_error(ovsdb_condition_from_json(ts, json_array_at(json, i),
                                                     NULL, &cnd));
 
         memset(cbdata.counts, 0, cbdata.n_rows * sizeof *cbdata.counts);
-        ovsdb_query(table, &cnd, do_query_cb, &cbdata);
+        ovsdb_query(table, &cnd, do_query_cb, &cbdata, NULL);
 
         printf("query %2"PRIuSIZE":", i);
         for (j = 0; j < cbdata.n_rows; j++) {
@@ -1434,7 +1443,7 @@ do_query_distinct(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "ROW argument is not JSON array");
     }
-    n_rows = json->array.n;
+    n_rows = json_array_size(json);
     rows = xmalloc(n_rows * sizeof *rows);
     classes = xmalloc(n_rows * sizeof *classes);
     n_classes = 0;
@@ -1445,7 +1454,7 @@ do_query_distinct(struct ovs_cmdl_context *ctx)
         /* Parse row. */
         row = ovsdb_row_create(table);
         uuid_generate(ovsdb_row_get_uuid_rw(row));
-        check_ovsdb_error(ovsdb_row_from_json(row, json->array.elems[i],
+        check_ovsdb_error(ovsdb_row_from_json(row, json_array_at(json, i),
                                               NULL, NULL, false));
 
         /* Initialize row and find equivalence class. */
@@ -1478,19 +1487,19 @@ do_query_distinct(struct ovs_cmdl_context *ctx)
     if (json->type != JSON_ARRAY) {
         ovs_fatal(0, "CONDITION argument is not JSON array");
     }
-    for (i = 0; i < json->array.n; i++) {
+    for (i = 0; i < json_array_size(json); i++) {
         struct ovsdb_row_set results;
         struct ovsdb_condition cnd;
         size_t j;
 
-        check_ovsdb_error(ovsdb_condition_from_json(ts, json->array.elems[i],
+        check_ovsdb_error(ovsdb_condition_from_json(ts, json_array_at(json, i),
                                                     NULL, &cnd));
 
         for (j = 0; j < n_classes; j++) {
             classes[j].count = 0;
         }
         ovsdb_row_set_init(&results);
-        ovsdb_query_distinct(table, &cnd, &columns, &results);
+        ovsdb_query_distinct(table, &cnd, &columns, &results, NULL);
         for (j = 0; j < results.n_rows; j++) {
             size_t k;
 
@@ -1645,11 +1654,11 @@ do_trigger(struct ovs_cmdl_context *ctx)
     for (i = 2; i < ctx->argc; i++) {
         struct json *params = parse_json(ctx->argv[i]);
         if (params->type == JSON_ARRAY
-            && json_array(params)->n == 2
-            && json_array(params)->elems[0]->type == JSON_STRING
-            && !strcmp(json_string(json_array(params)->elems[0]), "advance")
-            && json_array(params)->elems[1]->type == JSON_INTEGER) {
-            now += json_integer(json_array(params)->elems[1]);
+            && json_array_size(params) == 2
+            && json_array_at(params, 0)->type == JSON_STRING
+            && !strcmp(json_string(json_array_at(params, 0)), "advance")
+            && json_array_at(params, 1)->type == JSON_INTEGER) {
+            now += json_integer(json_array_at(params, 1));
             json_destroy(params);
         } else {
             struct test_trigger *t = xmalloc(sizeof *t);
@@ -1884,10 +1893,10 @@ do_transact(struct ovs_cmdl_context *ctx)
                       "with at least 1 element", i);
         }
 
-        n_args = command->array.n;
+        n_args = json_array_size(command);
         args = xmalloc((n_args + 1) * sizeof *args);
         for (j = 0; j < n_args; j++) {
-            struct json *s = command->array.elems[j];
+            const struct json *s = json_array_at(command, j);
             if (s->type != JSON_STRING) {
                 ovs_fatal(0, "transaction %d argument %d must be JSON string",
                           i, j);
@@ -2018,6 +2027,24 @@ print_idl_row_updated_link2(const struct idltest_link2 *l2, int step)
     if (updates.length) {
         print_and_log("%03d: table %s: updated columns:%s",
                       step, l2->header_.table->class_->name,
+                      ds_cstr(&updates));
+        ds_destroy(&updates);
+    }
+}
+
+static void
+print_idl_row_updated_indexed(const struct idltest_indexed *ind, int step)
+{
+    struct ds updates = DS_EMPTY_INITIALIZER;
+
+    for (size_t i = 0; i < IDLTEST_INDEXED_N_COLUMNS; i++) {
+        if (idltest_indexed_is_updated(ind, i)) {
+            ds_put_format(&updates, " %s", idltest_indexed_columns[i].name);
+        }
+    }
+    if (updates.length) {
+        print_and_log("%03d: table %s: updated columns:%s",
+                      step, ind->header_.table->class_->name,
                       ds_cstr(&updates));
         ds_destroy(&updates);
     }
@@ -2173,6 +2200,21 @@ print_idl_row_link2(const struct idltest_link2 *l2, int step, bool terse)
 }
 
 static void
+print_idl_row_indexed(const struct idltest_indexed *ind, int step, bool terse)
+{
+    struct ds msg = DS_EMPTY_INITIALIZER;
+
+    ds_put_format(&msg, "i=%"PRId64, ind->i);
+
+    char *row_msg = format_idl_row(&ind->header_, step, ds_cstr(&msg), terse);
+    print_and_log("%s", row_msg);
+    ds_destroy(&msg);
+    free(row_msg);
+
+    print_idl_row_updated_indexed(ind, step);
+}
+
+static void
 print_idl_row_simple3(const struct idltest_simple3 *s3, int step, bool terse)
 {
     struct ds msg = DS_EMPTY_INITIALIZER;
@@ -2252,6 +2294,7 @@ print_idl_row_singleton(const struct idltest_singleton *sng, int step,
 static void
 print_idl(struct ovsdb_idl *idl, int step, bool terse)
 {
+    const struct idltest_indexed *ind;
     const struct idltest_simple3 *s3;
     const struct idltest_simple4 *s4;
     const struct idltest_simple6 *s6;
@@ -2285,6 +2328,10 @@ print_idl(struct ovsdb_idl *idl, int step, bool terse)
         print_idl_row_simple6(s6, step, terse);
         n++;
     }
+    IDLTEST_INDEXED_FOR_EACH (ind, idl) {
+        print_idl_row_indexed(ind, step, terse);
+        n++;
+    }
     IDLTEST_SINGLETON_FOR_EACH (sng, idl) {
         print_idl_row_singleton(sng, step, terse);
         n++;
@@ -2297,6 +2344,7 @@ print_idl(struct ovsdb_idl *idl, int step, bool terse)
 static void
 print_idl_track(struct ovsdb_idl *idl, int step, bool terse)
 {
+    const struct idltest_indexed *ind;
     const struct idltest_simple3 *s3;
     const struct idltest_simple4 *s4;
     const struct idltest_simple6 *s6;
@@ -2329,6 +2377,10 @@ print_idl_track(struct ovsdb_idl *idl, int step, bool terse)
         print_idl_row_simple6(s6, step, terse);
         n++;
     }
+    IDLTEST_INDEXED_FOR_EACH (ind, idl) {
+        print_idl_row_indexed(ind, step, terse);
+        n++;
+    }
 
     if (!n) {
         print_and_log("%03d: empty", step);
@@ -2341,7 +2393,8 @@ parse_uuids(const struct json *json, struct ovsdb_symbol_table *symtab,
 {
     struct uuid uuid;
 
-    if (json->type == JSON_STRING && uuid_from_string(&uuid, json->string)) {
+    if (json->type == JSON_STRING
+        && uuid_from_string(&uuid, json_string(json))) {
         char *name = xasprintf("#%"PRIuSIZE"#", *n);
         fprintf(stderr, "%s = "UUID_FMT"\n", name, UUID_ARGS(&uuid));
         ovsdb_symbol_table_put(symtab, name, &uuid, false);
@@ -2350,8 +2403,8 @@ parse_uuids(const struct json *json, struct ovsdb_symbol_table *symtab,
     } else if (json->type == JSON_ARRAY) {
         size_t i;
 
-        for (i = 0; i < json->array.n; i++) {
-            parse_uuids(json->array.elems[i], symtab, n);
+        for (i = 0; i < json_array_size(json); i++) {
+            parse_uuids(json_array_at(json, i), symtab, n);
         }
     } else if (json->type == JSON_OBJECT) {
         const struct shash_node *node;
@@ -2368,16 +2421,20 @@ substitute_uuids(struct json *json, const struct ovsdb_symbol_table *symtab)
     if (json->type == JSON_STRING) {
         const struct ovsdb_symbol *symbol;
 
-        symbol = ovsdb_symbol_table_get(symtab, json->string);
+        symbol = ovsdb_symbol_table_get(symtab, json_string(json));
         if (symbol) {
-            free(json->string);
-            json->string = xasprintf(UUID_FMT, UUID_ARGS(&symbol->uuid));
+            if (json->storage_type == JSON_STRING_DYNAMIC) {
+                free(json->str_ptr);
+            }
+            json->storage_type = JSON_STRING_DYNAMIC;
+            json->str_ptr = xasprintf(UUID_FMT, UUID_ARGS(&symbol->uuid));
         }
     } else if (json->type == JSON_ARRAY) {
-        size_t i;
+        size_t i, n = json_array_size(json);
 
-        for (i = 0; i < json->array.n; i++) {
-            substitute_uuids(json->array.elems[i], symtab);
+        for (i = 0; i < n; i++) {
+            substitute_uuids(CONST_CAST(struct json *, json_array_at(json, i)),
+                             symtab);
         }
     } else if (json->type == JSON_OBJECT) {
         const struct shash_node *node;
@@ -2408,6 +2465,10 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
     struct ovsdb_idl_txn *txn;
     enum ovsdb_idl_txn_status status;
     bool increment = false;
+    /* FIXME: ovsdb_idl_check_consistency() doesn't currently handle refs added
+     * in the same txn, so if any op does this, we need to skip the check until
+     * that is fixed. */
+    bool skip_pre_commit_consistency_check = false;
 
     txn = ovsdb_idl_txn_create(idl);
     ovsdb_idl_check_consistency(idl);
@@ -2459,6 +2520,8 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
 
             s = idltest_simple_insert(txn);
             idltest_simple_set_i(s, atoi(arg1));
+        } else if (!strcmp(name, "insert_no_columns_changed")) {
+            idltest_simple_insert(txn);
         } else if (!strcmp(name, "insert_uuid")) {
             struct idltest_simple *s;
 
@@ -2472,6 +2535,26 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
             }
             s = idltest_simple_insert_persist_uuid(txn, &s_uuid);
             idltest_simple_set_i(s, atoi(arg2));
+        } else if (!strcmp(name, "insert_uuid_uref")) {
+            struct idltest_simple3 *s3;
+            struct idltest_simple4 *s4;
+
+            if (!arg1 || !arg2) {
+                ovs_fatal(0,
+                          "\"insert_uuid_uref\" command requires 2 arguments");
+            }
+
+            struct uuid s3_uuid;
+            struct uuid s4_uuid;
+            if (!uuid_from_string(&s3_uuid, arg1) ||
+                !uuid_from_string(&s4_uuid, arg2)) {
+                 ovs_fatal(
+                    0, "\"insert_uuid_uref\" command requires 2 valid uuids");
+            }
+            s4 = idltest_simple4_insert_persist_uuid(txn, &s4_uuid);
+            s3 = idltest_simple3_insert_persist_uuid(txn, &s3_uuid);
+            idltest_simple3_set_uref(s3, &s4, 1);
+            skip_pre_commit_consistency_check = true;
         } else if (!strcmp(name, "delete")) {
             const struct idltest_simple *s;
 
@@ -2540,7 +2623,9 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
         } else {
             ovs_fatal(0, "unknown command %s", name);
         }
-        ovsdb_idl_check_consistency(idl);
+        if (!skip_pre_commit_consistency_check) {
+            ovsdb_idl_check_consistency(idl);
+        }
     }
 
     status = ovsdb_idl_txn_commit_block(txn);
@@ -2652,25 +2737,26 @@ update_conditions(struct ovsdb_idl *idl, char *commands, int step)
         }
 
         struct ovsdb_idl_condition cond = OVSDB_IDL_CONDITION_INIT(&cond);
-        for (i = 0; i < json->array.n; i++) {
-            const struct json *clause = json->array.elems[i];
+        for (i = 0; i < json_array_size(json); i++) {
+            const struct json *clause = json_array_at(json, i);
             if (clause->type == JSON_TRUE) {
                 ovsdb_idl_condition_add_clause_true(&cond);
-            } else if (clause->type != JSON_ARRAY || clause->array.n != 3
-                       || clause->array.elems[0]->type != JSON_STRING
-                       || clause->array.elems[1]->type != JSON_STRING) {
+            } else if (clause->type != JSON_ARRAY
+                       || json_array_size(clause) != 3
+                       || json_array_at(clause, 0)->type != JSON_STRING
+                       || json_array_at(clause, 1)->type != JSON_STRING) {
                 ovs_fatal(0, "Error parsing condition");
             } else {
                 enum ovsdb_function function;
-                const char *function_s = json_string(clause->array.elems[1]);
+                const char *function_s = json_string(json_array_at(clause, 1));
                 struct ovsdb_error *error = ovsdb_function_from_string(
                     function_s, &function);
                 if (error) {
                     ovs_fatal(0, "unknown clause function %s", function_s);
                 }
 
-                const char *column = json_string(clause->array.elems[0]);
-                const struct json *arg = clause->array.elems[2];
+                const char *column = json_string(json_array_at(clause, 0));
+                const struct json *arg = json_array_at(clause, 2);
                 if (!strcmp(table_name, "simple")) {
                     parse_simple_json_clause(&cond, function, column, arg);
                 } else if (!strcmp(table_name, "link1")) {
@@ -2813,6 +2899,9 @@ do_idl(struct ovs_cmdl_context *ctx)
         if (!strcmp(arg, "reconnect")) {
             print_and_log("%03d: reconnect", step++);
             ovsdb_idl_force_reconnect(idl);
+        } else if (!strcmp(arg, "sleep")) {
+            print_and_log("%03d: sleep", step++);
+            xsleep(1);
         }  else if (!strncmp(arg, remote_s, strlen(remote_s))) {
             ovsdb_idl_set_remote(idl, arg + strlen(remote_s), true);
             print_and_log("%03d: new remotes: %s, is connected: %s", step++,
@@ -2977,6 +3066,29 @@ do_idl_partial_update_map_column(struct ovs_cmdl_context *ctx)
     printf("%03d: After trying to delete a deleted element\n", step++);
     dump_simple2(idl, myRow, step++);
 
+    myTxn = ovsdb_idl_txn_create(idl);
+    myRow = idltest_simple2_insert(myTxn);
+    idltest_simple2_update_smap_setkey(myRow, "key3", "myList3");
+    idltest_simple2_set_name(myRow, "String2");
+    idltest_simple2_delete(myRow);
+    ovsdb_idl_txn_commit_block(myTxn);
+    ovsdb_idl_txn_destroy(myTxn);
+    ovsdb_idl_get_initial_snapshot(idl);
+    printf("%03d: After Create element, update smap and Delete element\n",
+           step++);
+    dump_simple2(idl, myRow, step++);
+
+    myTxn = ovsdb_idl_txn_create(idl);
+    myRow = idltest_simple2_first(idl);
+    idltest_simple2_update_smap_setkey(myRow, "key4", "myList4");
+    idltest_simple2_set_name(myRow, "String3");
+    idltest_simple2_delete(myRow);
+    ovsdb_idl_txn_commit_block(myTxn);
+    ovsdb_idl_txn_destroy(myTxn);
+    ovsdb_idl_get_initial_snapshot(idl);
+    printf("%03d: After update smap and Delete element\n", step++);
+    dump_simple2(idl, myRow, step++);
+
     ovsdb_idl_destroy(idl);
     printf("%03d: End test\n", step);
 }
@@ -3023,7 +3135,8 @@ do_idl_partial_update_set_column(struct ovs_cmdl_context *ctx)
     myTxn = ovsdb_idl_txn_create(idl);
     idltest_simple3_get_uset(myRow, OVSDB_TYPE_UUID);
     struct uuid uuid_to_add;
-    uuid_from_string(&uuid_to_add, "001e43d2-dd3f-4616-ab6a-83a490bb0991");
+    ovs_assert(uuid_from_string(&uuid_to_add,
+               "001e43d2-dd3f-4616-ab6a-83a490bb0991"));
     idltest_simple3_update_uset_addvalue(myRow, uuid_to_add);
     idltest_simple3_set_name(myRow, "String2");
     ovsdb_idl_txn_commit_block(myTxn);
@@ -3035,7 +3148,8 @@ do_idl_partial_update_set_column(struct ovs_cmdl_context *ctx)
     /* Insert duplicate element. */
     myTxn = ovsdb_idl_txn_create(idl);
     struct uuid uuid_to_add2;
-    uuid_from_string(&uuid_to_add2, "0026b3ba-571b-4729-8227-d860a5210ab8");
+    ovs_assert(uuid_from_string(&uuid_to_add2,
+               "0026b3ba-571b-4729-8227-d860a5210ab8"));
     idltest_simple3_update_uset_addvalue(myRow, uuid_to_add2);
     ovsdb_idl_txn_commit_block(myTxn);
     ovsdb_idl_txn_destroy(myTxn);
@@ -3075,6 +3189,22 @@ do_idl_partial_update_set_column(struct ovs_cmdl_context *ctx)
     ovsdb_idl_get_initial_snapshot(idl);
     printf("%03d: After add to other table + set of strong ref\n", step++);
     dump_simple3(idl, myRow, step++);
+
+    /* create row, insert key, delete row */
+    myTxn = ovsdb_idl_txn_create(idl);
+    myRow = idltest_simple3_insert(myTxn);
+    ovs_assert(uuid_from_string(&uuid_to_add,
+               "12345678-dd3f-4616-ab6a-83a490bb0991"));
+    idltest_simple3_update_uset_addvalue(myRow, uuid_to_add);
+    idltest_simple3_set_name(myRow, "String2");
+    idltest_simple3_delete(myRow);
+    ovsdb_idl_txn_commit_block(myTxn);
+    ovsdb_idl_txn_destroy(myTxn);
+    ovsdb_idl_get_initial_snapshot(idl);
+    printf("%03d: After Create element, update set and Delete element\n",
+           step++);
+    dump_simple3(idl, myRow, step++);
+
     ovsdb_idl_destroy(idl);
     printf("%03d: End test\n", step);
 }
@@ -3484,20 +3614,37 @@ do_idl_table_column_check(struct ovs_cmdl_context *ctx)
                ctx->argv[r], has_table ? "has" : "doesn't have");
 
         bool has_col = idltest_server_has_simple5_table_col_irefmap(idl);
-        printf("%s remote %s col irefmap in table simple5\n",
-               ctx->argv[r], has_col ? "has" : "doesn't have");
+        const struct ovsdb_type *type =
+            idltest_simple5_irefmap_server_type(idl);
+        char *type_s = type ? ovsdb_type_to_english(type) : NULL;
+        printf("%s remote %s col irefmap in table simple5%s%s\n",
+               ctx->argv[r], has_col ? "has" : "doesn't have",
+               type ? ", type: " : "", type ? type_s : "");
+        free(type_s);
 
         has_col = idltest_server_has_link1_table_col_l2(idl);
-        printf("%s remote %s col l2 in table link1\n",
-               ctx->argv[r], has_col ? "has" : "doesn't have");
+        type = idltest_link1_l2_server_type(idl);
+        type_s = type ? ovsdb_type_to_english(type) : NULL;
+        printf("%s remote %s col l2 in table link1%s%s\n",
+               ctx->argv[r], has_col ? "has" : "doesn't have",
+               type ? ", type: " : "", type ? type_s : "");
+        free(type_s);
 
         has_col = idltest_server_has_link1_table_col_i(idl);
-        printf("%s remote %s col i in table link1\n",
-               ctx->argv[r], has_col ? "has" : "doesn't have");
+        type = idltest_link1_i_server_type(idl);
+        type_s = type ? ovsdb_type_to_english(type) : NULL;
+        printf("%s remote %s col i in table link1%s%s\n",
+               ctx->argv[r], has_col ? "has" : "doesn't have",
+               type ? ", type: " : "", type ? type_s : "");
+        free(type_s);
 
         has_col = idltest_server_has_simple7_table_col_id(idl);
-        printf("%s remote %s col id in table simple7\n",
-               ctx->argv[r], has_col ? "has" : "doesn't have");
+        type = idltest_simple7_id_server_type(idl);
+        type_s = type ? ovsdb_type_to_english(type) : NULL;
+        printf("%s remote %s col id in table simple7%s%s\n",
+               ctx->argv[r], has_col ? "has" : "doesn't have",
+               type ? ", type: " : "", type ? type_s : "");
+        free(type_s);
 
         printf("--- remote %s done ---\n", ctx->argv[r]);
     }

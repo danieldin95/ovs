@@ -169,8 +169,6 @@ tnl_type_to_nw_proto(const char type[], uint8_t nw_protos[2])
     if (!strcmp(type, "geneve") || !strcmp(type, "vxlan") ||
         !strcmp(type, "gtpu")) {
         nw_protos[0] = IPPROTO_UDP;
-    } else if (!strcmp(type, "stt")) {
-        nw_protos[0] = IPPROTO_TCP;
     } else if (!strcmp(type, "gre") || !strcmp(type, "erspan") ||
                !strcmp(type, "ip6erspan") || !strcmp(type, "ip6gre")) {
         nw_protos[0] = IPPROTO_GRE;
@@ -347,7 +345,7 @@ tnl_port_show_v(struct ds *ds)
         mask_len = buf.size;
 
         /* build string. */
-        odp_flow_format(key, key_len, mask, mask_len, NULL, ds, false);
+        odp_flow_format(key, key_len, mask, mask_len, NULL, ds, false, false);
         ds_put_format(ds, "\n");
     }
 }

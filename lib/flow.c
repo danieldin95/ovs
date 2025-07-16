@@ -402,18 +402,25 @@ parse_ethertype(const void **datap, size_t *sizep)
     return htons(FLOW_DL_TYPE_NONE);
 }
 
+static inline bool
+icmp6_is_nd(const struct icmp6_data_header *icmp6)
+{
+    return (icmp6->icmp6_base.icmp6_code == 0 &&
+            (icmp6->icmp6_base.icmp6_type == ND_NEIGHBOR_SOLICIT ||
+             icmp6->icmp6_base.icmp6_type == ND_NEIGHBOR_ADVERT));
+}
+
 /* Returns 'true' if the packet is an ND packet. In that case the '*nd_target'
  * and 'arp_buf[]' are filled in.  If the packet is not an ND packet, 'false'
  * is returned and no values are filled in on '*nd_target' or 'arp_buf[]'. */
 static inline bool
 parse_icmpv6(const void **datap, size_t *sizep,
              const struct icmp6_data_header *icmp6,
-             ovs_be32 *rso_flags, const struct in6_addr **nd_target,
+             ovs_be32 *rso_flags,
+             const union ovs_16aligned_in6_addr **nd_target,
              struct eth_addr arp_buf[2], uint8_t *opt_type)
 {
-    if (icmp6->icmp6_base.icmp6_code != 0 ||
-        (icmp6->icmp6_base.icmp6_type != ND_NEIGHBOR_SOLICIT &&
-         icmp6->icmp6_base.icmp6_type != ND_NEIGHBOR_ADVERT)) {
+    if (!icmp6_is_nd(icmp6)) {
         return false;
     }
 
@@ -856,7 +863,12 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
     /* Initialize packet's layer pointer and offsets. */
     frame = data;
-    dp_packet_reset_offsets(packet);
+    if (dp_packet_tunnel(packet)) {
+        /* Preserve inner offsets from previous circulation. */
+        dp_packet_reset_outer_offsets(packet);
+    } else {
+        dp_packet_reset_offsets(packet);
+    }
 
     if (packet_type == htonl(PT_ETH)) {
         /* Must have full Ethernet header to proceed. */
@@ -935,10 +947,6 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         nw_proto = nh->ip_proto;
         nw_frag = ipv4_get_nw_frag(nh);
         data_pull(&data, &size, ip_len);
-        dp_packet_hwol_set_tx_ipv4(packet);
-        if (dp_packet_ip_checksum_good(packet)) {
-            dp_packet_hwol_set_tx_ip_csum(packet);
-        }
     } else if (dl_type == htons(ETH_TYPE_IPV6)) {
         const struct ovs_16aligned_ip6_hdr *nh = data;
         ovs_be32 tc_flow;
@@ -951,8 +959,6 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             goto out;
         }
         data_pull(&data, &size, sizeof *nh);
-
-        dp_packet_hwol_set_tx_ipv6(packet);
         plen = ntohs(nh->ip6_plen);
         dp_packet_set_l2_pad_size(packet, size - plen);
         size = plen;   /* Never pull padding. */
@@ -1042,7 +1048,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
                 if (OVS_LIKELY(tcp_hdr_len >= TCP_HEADER_LEN)
                     && OVS_LIKELY(size >= tcp_hdr_len)) {
-                    miniflow_push_be32(mf, arp_tha.ea[2], 0);
+                    /* tcp_flags are not at the beginning of the block. */
+                    miniflow_pad_from_64(mf, tcp_flags);
                     miniflow_push_be32(mf, tcp_flags,
                                        TCP_FLAGS_BE32(tcp->tcp_ctl));
                     miniflow_push_be16(mf, tp_src, tcp->tcp_src);
@@ -1054,11 +1061,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                     } else if (dl_type == htons(ETH_TYPE_IPV6)) {
                         dp_packet_update_rss_hash_ipv6_tcp_udp(packet);
                     }
-                    dp_packet_ol_l4_csum_check_partial(packet);
-                    if (dp_packet_l4_checksum_good(packet)
-                        || dp_packet_ol_l4_csum_partial(packet)) {
-                        dp_packet_hwol_set_csum_tcp(packet);
-                    }
+                    dp_packet_l4_proto_set_tcp(packet);
                 }
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_UDP)) {
@@ -1074,11 +1077,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 } else if (dl_type == htons(ETH_TYPE_IPV6)) {
                     dp_packet_update_rss_hash_ipv6_tcp_udp(packet);
                 }
-                dp_packet_ol_l4_csum_check_partial(packet);
-                if (dp_packet_l4_checksum_good(packet)
-                    || dp_packet_ol_l4_csum_partial(packet)) {
-                    dp_packet_hwol_set_csum_udp(packet);
-                }
+                dp_packet_l4_proto_set_udp(packet);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_SCTP)) {
             if (OVS_LIKELY(size >= SCTP_HEADER_LEN)) {
@@ -1088,11 +1087,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 miniflow_push_be16(mf, tp_dst, sctp->sctp_dst);
                 miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
                 miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
-                dp_packet_ol_l4_csum_check_partial(packet);
-                if (dp_packet_l4_checksum_good(packet)
-                    || dp_packet_ol_l4_csum_partial(packet)) {
-                    dp_packet_hwol_set_csum_sctp(packet);
-                }
+                dp_packet_l4_proto_set_sctp(packet);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_ICMP)) {
             if (OVS_LIKELY(size >= ICMP_HEADER_LEN)) {
@@ -1109,15 +1104,15 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
                 miniflow_push_be16(mf, tp_src, htons(igmp->igmp_type));
                 miniflow_push_be16(mf, tp_dst, htons(igmp->igmp_code));
-                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
-                miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
+                /* ct_tp_src/dst are not extracted for IGMP. */
+                miniflow_pad_to_64(mf, tp_dst);
                 miniflow_push_be32(mf, igmp_group_ip4,
                                    get_16aligned_be32(&igmp->group));
                 miniflow_pad_to_64(mf, igmp_group_ip4);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_ICMPV6)) {
             if (OVS_LIKELY(size >= sizeof(struct icmp6_data_header))) {
-                const struct in6_addr *nd_target;
+                const union ovs_16aligned_in6_addr *nd_target;
                 struct eth_addr arp_buf[2];
                 /* This will populate whether we received Option 1
                  * or Option 2. */
@@ -1165,6 +1160,15 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 }
             }
         }
+    } else if (ct_nw_proto_p &&
+               (*ct_nw_proto_p == IPPROTO_TCP ||
+                *ct_nw_proto_p == IPPROTO_UDP ||
+                *ct_nw_proto_p == IPPROTO_SCTP ||
+                *ct_nw_proto_p == IPPROTO_ICMP ||
+                (*ct_nw_proto_p == IPPROTO_ICMPV6 && !icmp6_is_nd(data)))) {
+        miniflow_pad_from_64(mf, ct_tp_src);
+        miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+        miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
     }
  out:
     dst->map = mf.map;
@@ -1186,7 +1190,7 @@ parse_dl_type(const void **datap, size_t *sizep, ovs_be16 *first_vlan_tci_p)
  * If 'packet' is not an Ethernet packet embedding TCP, returns 0.
  * 'dl_type_p' will be set only if the 'packet' is an Ethernet packet.
  * 'nw_frag_p' will be set only if the 'packet' is an IP packet.
- * 'first_vlan_tci' will be set only if the 'packet' contains vlan header.
+ * 'first_vlan_tci_p' will be set only if the 'packet' contains vlan header.
  *
  * The caller must ensure that 'packet' is at least ETH_HEADER_LEN bytes
  * long.'*/
@@ -1261,11 +1265,17 @@ parse_tcp_flags(struct dp_packet *packet,
     }
 
     packet->l4_ofs = (uint16_t)((char *)data - frame);
-    if (!(nw_frag & FLOW_NW_FRAG_LATER) && nw_proto == IPPROTO_TCP &&
-        size >= TCP_HEADER_LEN) {
-        const struct tcp_header *tcp = data;
+    if (!(nw_frag & FLOW_NW_FRAG_LATER)) {
+        if (nw_proto == IPPROTO_TCP && size >= TCP_HEADER_LEN) {
+            const struct tcp_header *tcp = data;
 
-        return TCP_FLAGS(tcp->tcp_ctl);
+            dp_packet_l4_proto_set_tcp(packet);
+            return TCP_FLAGS(tcp->tcp_ctl);
+        } else if (nw_proto == IPPROTO_UDP && size >= UDP_HEADER_LEN) {
+            dp_packet_l4_proto_set_udp(packet);
+        } else if (nw_proto == IPPROTO_SCTP && size >= SCTP_HEADER_LEN) {
+            dp_packet_l4_proto_set_sctp(packet);
+        }
     }
 
     return 0;
@@ -3211,7 +3221,7 @@ flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
             tcp->tcp_csum = 0;
             tcp->tcp_csum = csum_finish(csum_continue(pseudo_hdr_csum,
                                                       tcp, l4_len));
-            dp_packet_ol_set_l4_csum_good(p);
+            dp_packet_l4_checksum_set_good(p);
         } else if (flow->nw_proto == IPPROTO_UDP) {
             struct udp_header *udp = dp_packet_l4(p);
 
@@ -3221,7 +3231,7 @@ flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
             if (!udp->udp_csum) {
                 udp->udp_csum = htons(0xffff);
             }
-            dp_packet_ol_set_l4_csum_good(p);
+            dp_packet_l4_checksum_set_good(p);
         } else if (flow->nw_proto == IPPROTO_ICMP) {
             struct icmp_header *icmp = dp_packet_l4(p);
 
@@ -3269,12 +3279,7 @@ packet_expand(struct dp_packet *p, const struct flow *flow, size_t size)
             struct ip_header *ip = dp_packet_l3(p);
 
             ip->ip_tot_len = htons(p->l4_ofs - p->l3_ofs + l4_len);
-            if (dp_packet_hwol_tx_ip_csum(p)) {
-                dp_packet_ol_reset_ip_csum_good(p);
-            } else {
-                dp_packet_ip_set_header_csum(p, false);
-                dp_packet_ol_set_ip_csum_good(p);
-            }
+            dp_packet_ip_set_header_csum(p, false);
             pseudo_hdr_csum = packet_csum_pseudoheader(ip);
         } else { /* ETH_TYPE_IPV6 */
             struct ovs_16aligned_ip6_hdr *nh = dp_packet_l3(p);
@@ -3373,9 +3378,9 @@ flow_compose(struct dp_packet *p, const struct flow *flow,
              * bit.
              */
             ip->ip_csum ^= (OVS_FORCE ovs_be16) 0x1;
-            dp_packet_ip_checksum_bad(p);
+            dp_packet_ip_checksum_set_bad(p);
         } else {
-            dp_packet_ol_set_ip_csum_good(p);
+            dp_packet_ip_checksum_set_good(p);
         }
 
         pseudo_hdr_csum = packet_csum_pseudoheader(ip);
@@ -3419,6 +3424,24 @@ flow_compose(struct dp_packet *p, const struct flow *flow,
             put_16aligned_be32(&arp->ar_tpa, flow->nw_dst);
             arp->ar_sha = flow->arp_sha;
             arp->ar_tha = flow->arp_tha;
+        }
+    } else if (flow->dl_type == htons(ETH_TYPE_NSH)) {
+        struct nsh_hdr *nsh;
+
+        nsh = dp_packet_put_zeros(p, sizeof *nsh);
+        dp_packet_set_l3(p, nsh);
+
+        nsh_set_flags_ttl_len(nsh, flow->nsh.flags, flow->nsh.ttl,
+                              flow->nsh.mdtype == NSH_M_TYPE1
+                              ? NSH_M_TYPE1_LEN : NSH_BASE_HDR_LEN);
+        nsh->next_proto = flow->nsh.np;
+        nsh->md_type = flow->nsh.mdtype;
+        put_16aligned_be32(&nsh->path_hdr, flow->nsh.path_hdr);
+
+        if (flow->nsh.mdtype == NSH_M_TYPE1) {
+            for (size_t i = 0; i < 4; i++) {
+                put_16aligned_be32(&nsh->md1.context[i], flow->nsh.context[i]);
+            }
         }
     }
 

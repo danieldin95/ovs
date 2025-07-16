@@ -33,7 +33,6 @@
 #include "ovsdb-parser.h"
 #include "ovsdb-session.h"
 #include "ovsdb-types.h"
-#include "sset.h"
 #include "svec.h"
 #include "util.h"
 #include "uuid.h"
@@ -843,15 +842,17 @@ static enum condition_type
 condition_classify(const struct json *condition)
 {
     if (condition) {
-        const struct json_array *a = json_array(condition);
-        switch (a->n) {
+        switch (json_array_size(condition)) {
         case 0:
             return COND_FALSE;
 
-        case 1:
-            return (a->elems[0]->type == JSON_FALSE ? COND_FALSE
-                    : a->elems[0]->type == JSON_TRUE ? COND_TRUE
+        case 1: {
+            const struct json *cond = json_array_at(condition, 0);
+
+            return (cond->type == JSON_FALSE ? COND_FALSE
+                    : cond->type == JSON_TRUE ? COND_TRUE
                     : COND_OTHER);
+        }
 
         default:
             return COND_OTHER;
@@ -1387,9 +1388,9 @@ ovsdb_cs_db_parse_lock_notify(struct ovsdb_cs_db *db,
 {
     if (db->lock_name
         && params->type == JSON_ARRAY
-        && json_array(params)->n > 0
-        && json_array(params)->elems[0]->type == JSON_STRING) {
-        const char *lock_name = json_string(json_array(params)->elems[0]);
+        && json_array_size(params) > 0
+        && json_array_at(params, 0)->type == JSON_STRING) {
+        const char *lock_name = json_string(json_array_at(params, 0));
 
         if (!strcmp(db->lock_name, lock_name)) {
             ovsdb_cs_db_update_has_lock(db, new_has_lock);
@@ -1523,12 +1524,12 @@ ovsdb_cs_send_monitor_request(struct ovsdb_cs *cs, struct ovsdb_cs_db *db,
                 ovs_assert(mr->type == JSON_ARRAY);
 
                 struct json *mr0;
-                if (json_array(mr)->n == 0) {
+                if (json_array_size(mr) == 0) {
                     mr0 = json_object_create();
                     json_object_put(mr0, "columns", json_array_create_empty());
                     json_array_add(mr, mr0);
                 } else {
-                    mr0 = json_array(mr)->elems[0];
+                    mr0 = CONST_CAST(struct json *, json_array_at(mr, 0));
                 }
                 ovs_assert(mr0->type == JSON_OBJECT);
 
@@ -1546,9 +1547,7 @@ ovsdb_cs_send_monitor_request(struct ovsdb_cs *cs, struct ovsdb_cs_db *db,
                               json_clone(db->monitor_id),
                               mrs);
     if (version == 3) {
-        struct json *json_last_id = json_string_create_nocopy(
-            xasprintf(UUID_FMT, UUID_ARGS(&db->last_id)));
-        json_array_add(params, json_last_id);
+        json_array_add(params, json_string_create_uuid(&db->last_id));
     }
     ovsdb_cs_send_request(cs, jsonrpc_create_request(method, params, NULL));
 }
@@ -1587,21 +1586,21 @@ ovsdb_cs_db_parse_monitor_reply(struct ovsdb_cs_db *db,
     const struct json *table_updates;
     bool clear;
     if (version == 3) {
-        if (result->type != JSON_ARRAY || result->array.n != 3
-            || (result->array.elems[0]->type != JSON_TRUE &&
-                result->array.elems[0]->type != JSON_FALSE)
-            || result->array.elems[1]->type != JSON_STRING
+        if (result->type != JSON_ARRAY || json_array_size(result) != 3
+            || (json_array_at(result, 0)->type != JSON_TRUE &&
+                json_array_at(result, 0)->type != JSON_FALSE)
+            || json_array_at(result, 1)->type != JSON_STRING
             || !uuid_from_string(&db->last_id,
-                                 json_string(result->array.elems[1]))) {
+                                 json_string(json_array_at(result, 1)))) {
             struct ovsdb_error *error = ovsdb_syntax_error(
                 result, NULL, "bad monitor_cond_since reply format");
             log_parse_update_error(error);
             return;
         }
 
-        bool found = json_boolean(result->array.elems[0]);
+        bool found = json_boolean(json_array_at(result, 0));
         clear = !found;
-        table_updates = result->array.elems[2];
+        table_updates = json_array_at(result, 2);
     } else {
         clear = true;
         table_updates = result;
@@ -1628,7 +1627,7 @@ ovsdb_cs_db_parse_update_rpc(struct ovsdb_cs_db *db,
 
     struct json *params = msg->params;
     int n = version == 3 ? 3 : 2;
-    if (params->type != JSON_ARRAY || params->array.n != n) {
+    if (params->type != JSON_ARRAY || json_array_size(params) != n) {
         struct ovsdb_error *error = ovsdb_syntax_error(
             params, NULL, "%s must be an array with %u elements.",
             msg->method, n);
@@ -1636,12 +1635,12 @@ ovsdb_cs_db_parse_update_rpc(struct ovsdb_cs_db *db,
         return false;
     }
 
-    if (!json_equal(params->array.elems[0], db->monitor_id)) {
+    if (!json_equal(json_array_at(params, 0), db->monitor_id)) {
         return false;
     }
 
     if (version == 3) {
-        const char *last_id = json_string(params->array.elems[1]);
+        const char *last_id = json_string(json_array_at(params, 1));
         if (!uuid_from_string(&db->last_id, last_id)) {
             struct ovsdb_error *error = ovsdb_syntax_error(
                 params, NULL, "Last-id %s is not in UUID format.", last_id);
@@ -1650,7 +1649,8 @@ ovsdb_cs_db_parse_update_rpc(struct ovsdb_cs_db *db,
         }
     }
 
-    struct json *table_updates = params->array.elems[version == 3 ? 2 : 1];
+    const struct json *table_updates = json_array_at(params,
+                                                     version == 3 ? 2 : 1);
     ovsdb_cs_db_add_update(db, table_updates, version, false, false);
     return true;
 }
@@ -1663,8 +1663,8 @@ ovsdb_cs_handle_monitor_canceled(struct ovsdb_cs *cs,
     if (msg->type != JSONRPC_NOTIFY
         || strcmp(msg->method, "monitor_canceled")
         || msg->params->type != JSON_ARRAY
-        || msg->params->array.n != 1
-        || !json_equal(msg->params->array.elems[0], db->monitor_id)) {
+        || json_array_size(msg->params) != 1
+        || !json_equal(json_array_at(msg->params, 0), db->monitor_id)) {
         return false;
     }
 
@@ -1880,7 +1880,7 @@ server_column_get_string(const struct server_row *row,
 {
     ovs_assert(server_columns[index].type.key.type == OVSDB_TYPE_STRING);
     const struct ovsdb_datum *d = &row->data[index];
-    return d->n == 1 ? d->keys[0].s->string : default_value;
+    return d->n == 1 ? json_string(d->keys[0].s) : default_value;
 }
 
 static bool
@@ -2052,7 +2052,7 @@ ovsdb_cs_compose_server_monitor_request(const struct json *schema_json,
     struct json *monitor_requests = json_object_create();
 
     const char *table_name = "Database";
-    const struct sset *table_schema
+    const struct shash *table_schema
         = schema ? shash_find_data(schema, table_name) : NULL;
     if (!table_schema) {
         VLOG_WARN("%s database lacks %s table "
@@ -2064,7 +2064,7 @@ ovsdb_cs_compose_server_monitor_request(const struct json *schema_json,
         for (size_t j = 0; j < N_SERVER_COLUMNS; j++) {
             const struct server_column *column = &server_columns[j];
             bool db_has_column = (table_schema &&
-                                  sset_contains(table_schema, column->name));
+                                  shash_find(table_schema, column->name));
             if (table_schema && !db_has_column) {
                 VLOG_WARN("%s table in %s database lacks %s column "
                           "(database needs upgrade?)",
@@ -2098,9 +2098,9 @@ log_error(struct ovsdb_error *error)
 
 /* Parses 'schema_json', an OVSDB schema in JSON format as described in RFC
  * 7047, to obtain the names of its rows and columns.  If successful, returns
- * an shash whose keys are table names and whose values are ssets, where each
- * sset contains the names of its table's columns.  On failure (due to a parse
- * error), returns NULL.
+ * an shash whose keys are table names and whose values are shashes, where each
+ * shash contains the names of its table's columns as keys and an ovsdb_type as
+ * data.  On failure (due to a parse error), returns NULL.
  *
  * It would also be possible to use the general-purpose OVSDB schema parser in
  * ovsdb-server, but that's overkill, possibly too strict for the current use
@@ -2111,9 +2111,9 @@ ovsdb_cs_parse_schema(const struct json *schema_json)
 {
     struct ovsdb_parser parser;
     const struct json *tables_json;
+    struct shash *schema = NULL;
     struct ovsdb_error *error;
     struct shash_node *node;
-    struct shash *schema;
 
     ovsdb_parser_init(&parser, schema_json, "database schema");
     tables_json = ovsdb_parser_member(&parser, "tables", OP_OBJECT);
@@ -2135,22 +2135,49 @@ ovsdb_cs_parse_schema(const struct json *schema_json)
         columns_json = ovsdb_parser_member(&parser, "columns", OP_OBJECT);
         error = ovsdb_parser_destroy(&parser);
         if (error) {
-            log_error(error);
-            ovsdb_cs_free_schema(schema);
-            return NULL;
+            goto error;
         }
 
-        struct sset *columns = xmalloc(sizeof *columns);
-        sset_init(columns);
+        struct shash *columns = xmalloc(sizeof *columns);
+        shash_init(columns);
 
         struct shash_node *node2;
         SHASH_FOR_EACH (node2, json_object(columns_json)) {
+            const struct json *column_json = node2->data;
             const char *column_name = node2->name;
-            sset_add(columns, column_name);
+            const struct json *type_json;
+            struct ovsdb_type *type;
+
+            ovsdb_parser_init(&parser, column_json,
+                              "schema for column %s", column_name);
+            type_json = ovsdb_parser_member(&parser, "type",
+                                            OP_STRING | OP_OBJECT);
+            error = ovsdb_parser_destroy(&parser);
+            if (error) {
+                goto error;
+            }
+
+            type = xzalloc(sizeof *type);
+            error = ovsdb_type_from_json(type, type_json);
+            if (error) {
+                free(type);
+                goto error;
+            }
+
+            if (!shash_add_once(columns, column_name, type)) {
+                /* Should never happen, but just in case. */
+                ovsdb_type_destroy(type);
+                free(type);
+            }
         }
         shash_add(schema, table_name, columns);
     }
     return schema;
+
+error:
+    log_error(error);
+    ovsdb_cs_free_schema(schema);
+    return NULL;
 }
 
 /* Frees 'schema', which is in the format returned by
@@ -2162,9 +2189,15 @@ ovsdb_cs_free_schema(struct shash *schema)
         struct shash_node *node;
 
         SHASH_FOR_EACH_SAFE (node, schema) {
-            struct sset *sset = node->data;
-            sset_destroy(sset);
-            free(sset);
+            struct shash *columns = node->data;
+            struct shash_node *node2;
+
+            SHASH_FOR_EACH (node2, columns) {
+                ovsdb_type_destroy(node2->data);
+            }
+            shash_destroy_free_data(columns);
+            free(columns);
+
             shash_delete(schema, node);
         }
         shash_destroy(schema);

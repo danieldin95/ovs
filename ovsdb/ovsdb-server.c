@@ -67,12 +67,13 @@
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_server);
 
-/* SSL configuration. */
+/* SSL/TLS configuration. */
 static char *private_key_file;
 static char *certificate_file;
 static char *ca_cert_file;
 static char *ssl_protocols;
 static char *ssl_ciphers;
+static char *ssl_ciphersuites;
 static bool bootstrap_ca_cert;
 
 /* Try to reclaim heap memory back to system after DB compaction. */
@@ -503,7 +504,7 @@ add_database_config(struct shash *db_conf, const char *opt,
 
     conf = shash_replace_nocopy(db_conf, filename, conf);
     if (conf) {
-        VLOG_WARN("Duplicate database configuration: %s", filename);
+        VLOG_WARN("Duplicate database configuration: %s", opt);
         db_config_destroy(conf);
     }
 }
@@ -692,7 +693,7 @@ reconfigure_ovsdb_server(struct server_config *server_config)
     } else {
         error = reconfigure_ssl(server_config->all_dbs);
         if (error) {
-            VLOG_WARN("failed to configure SSL: %s", error);
+            VLOG_WARN("failed to configure SSL/TLS: %s", error);
             res = false;
         }
     }
@@ -816,7 +817,7 @@ main(int argc, char *argv[])
         /* ovsdb-server is usually a long-running process, in which case it
          * makes plenty of sense to log the version, but --run makes
          * ovsdb-server more like a command-line tool, so skip it.  */
-        VLOG_INFO("%s (Open vSwitch) %s", program_name, VERSION);
+        VLOG_INFO("%s", ovs_get_program_version());
     }
 
     unixctl_command_register("exit", "", 0, 0, ovsdb_server_exit, &exiting);
@@ -1791,17 +1792,21 @@ reconfigure_ssl(const struct shash *all_dbs)
     const char *resolved_ca_cert;
     const char *resolved_ssl_protocols;
     const char *resolved_ssl_ciphers;
+    const char *resolved_ssl_ciphersuites;
 
     resolved_private_key = query_db_string(all_dbs, private_key_file, &errors);
     resolved_certificate = query_db_string(all_dbs, certificate_file, &errors);
     resolved_ca_cert = query_db_string(all_dbs, ca_cert_file, &errors);
     resolved_ssl_protocols = query_db_string(all_dbs, ssl_protocols, &errors);
     resolved_ssl_ciphers = query_db_string(all_dbs, ssl_ciphers, &errors);
+    resolved_ssl_ciphersuites = query_db_string(all_dbs, ssl_ciphersuites,
+                                                &errors);
 
     stream_ssl_set_key_and_cert(resolved_private_key, resolved_certificate);
     stream_ssl_set_ca_cert_file(resolved_ca_cert, bootstrap_ca_cert);
     stream_ssl_set_protocols(resolved_ssl_protocols);
     stream_ssl_set_ciphers(resolved_ssl_ciphers);
+    stream_ssl_set_ciphersuites(resolved_ssl_ciphersuites);
 
     return errors.string;
 }
@@ -2698,6 +2703,10 @@ parse_options(int argc, char *argv[],
             ssl_ciphers = optarg;
             break;
 
+        case OPT_SSL_CIPHERSUITES:
+            ssl_ciphersuites = optarg;
+            break;
+
         case OPT_BOOTSTRAP_CA_CERT:
             ca_cert_file = optarg;
             bootstrap_ca_cert = true;
@@ -2738,6 +2747,7 @@ parse_options(int argc, char *argv[],
             break;
 
         case OPT_CONFIG_FILE:
+            free(config_file_path);
             config_file_path = abs_file_name(ovs_dbdir(), optarg);
             add_default_db = false;
             break;
@@ -3023,16 +3033,18 @@ db_config_from_json(const char *name, const struct json *json)
         sync_exclude = ovsdb_parser_member(&parser, "exclude-tables",
                                            OP_ARRAY | OP_OPTIONAL);
         if (sync_exclude) {
-            const struct json_array *exclude = json_array(sync_exclude);
             struct sset set = SSET_INITIALIZER(&set);
+            size_t n = json_array_size(sync_exclude);
 
-            for (size_t i = 0; i < exclude->n; i++) {
-                if (exclude->elems[i]->type != JSON_STRING) {
+            for (size_t i = 0; i < n; i++) {
+                const struct json *exclude = json_array_at(sync_exclude, i);
+
+                if (exclude->type != JSON_STRING) {
                     ovsdb_parser_raise_error(&parser,
                         "'exclude-tables' must contain strings");
                     break;
                 }
-                sset_add(&set, json_string(exclude->elems[i]));
+                sset_add(&set, json_string(exclude));
             }
             conf->ab.sync_exclude = sset_join(&set, ",", "");
             sset_destroy(&set);

@@ -1,4 +1,5 @@
-/* Copyright 2020, Red Hat, Inc.
+/*
+ * Copyright (c) 2025, Red Hat, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +18,13 @@
 #error "Use this header only with sparse.  It is not a correct implementation."
 #endif
 
-/* sparse doesn't know about gcc atomic builtins. */
-#ifndef __ATOMIC_ACQUIRE
-#define __ATOMIC_ACQUIRE 0
-#define __atomic_load_n(p, memorder) *(p)
+#ifndef __OPENSSL_CONFIGURATION_SPARSE
+#define __OPENSSL_CONFIGURATION_SPARSE
+
+#ifndef __has_include
+#define __has_include(x) 0
 #endif
 
-/* Get actual <rte_trace_point.h> definitions for us to annotate and
- * build on. */
-#include_next <rte_trace_point.h>
+#include_next <openssl/configuration.h>
+
+#endif /* <openssl/configuration.h> sparse */

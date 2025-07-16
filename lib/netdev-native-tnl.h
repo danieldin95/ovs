@@ -123,20 +123,8 @@ netdev_tnl_ip_build_header(struct ovs_action_push_tnl *data,
 extern uint16_t tnl_udp_port_min;
 extern uint16_t tnl_udp_port_max;
 
-static inline ovs_be16
-netdev_tnl_get_src_port(struct dp_packet *packet)
-{
-    uint32_t hash;
+ovs_be16 netdev_tnl_get_src_port(struct dp_packet *);
 
-    hash = dp_packet_get_rss_hash(packet);
-
-    return htons((((uint64_t) hash * (tnl_udp_port_max - tnl_udp_port_min)) >> 32) +
-                 tnl_udp_port_min);
-}
-
-void *
-netdev_tnl_ip_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
-                             unsigned int *hlen);
 void *
 netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
                           int size, int *ip_tot_size, ovs_be32 ipv6_label);

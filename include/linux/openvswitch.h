@@ -202,6 +202,11 @@ enum ovs_packet_cmd {
  * @OVS_PACKET_ATTR_LEN: Packet size before truncation.
  * %OVS_PACKET_ATTR_USERSPACE action specify the Maximum received fragment
  * size.
+ * @OVS_PACKET_ATTR_UPCALL_PID: Netlink PID to use for upcalls while
+ * processing %OVS_PACKET_CMD_EXECUTE.  Takes precedence over all other ways
+ * to determine the Netlink PID including %OVS_USERSPACE_ATTR_PID,
+ * %OVS_DP_ATTR_UPCALL_PID, %OVS_DP_ATTR_PER_CPU_PIDS and the
+ * %OVS_VPORT_ATTR_UPCALL_PID.
  *
  * These attributes follow the &struct ovs_header within the Generic Netlink
  * payload for %OVS_PACKET_* commands.
@@ -221,6 +226,7 @@ enum ovs_packet_attr {
 	OVS_PACKET_ATTR_MRU,	    /* Maximum received IP fragment size. */
 	OVS_PACKET_ATTR_LEN,		/* Packet size before truncation. */
 	OVS_PACKET_ATTR_HASH,		/* Packet hash. */
+	OVS_PACKET_ATTR_UPCALL_PID, /* u32 Netlink PID. */
 	__OVS_PACKET_ATTR_MAX
 };
 
@@ -247,8 +253,8 @@ enum ovs_vport_type {
 	OVS_VPORT_TYPE_GRE,      /* GRE tunnel. */
 	OVS_VPORT_TYPE_VXLAN,	 /* VXLAN tunnel. */
 	OVS_VPORT_TYPE_GENEVE,	 /* Geneve tunnel. */
-	OVS_VPORT_TYPE_LISP = 105,  /* LISP tunnel */
-	OVS_VPORT_TYPE_STT = 106, /* STT tunnel */
+	/* OVS_VPORT_TYPE_LISP = 105,	LISP tunnel (no longer supported). */
+	/* OVS_VPORT_TYPE_STT = 106,	STT tunnel (no longer supported). */
 	OVS_VPORT_TYPE_ERSPAN = 107, /* ERSPAN tunnel. */
 	OVS_VPORT_TYPE_IP6ERSPAN = 108, /* ERSPAN tunnel. */
 	OVS_VPORT_TYPE_IP6GRE = 109,
@@ -465,6 +471,10 @@ enum xlate_error {
 	XLATE_UNSUPPORTED_PACKET_TYPE,
 	XLATE_CONGESTION_DROP,
 	XLATE_FORWARDING_DISABLED,
+	XLATE_TUNNEL_ROUTING_FAILED,
+	XLATE_TUNNEL_OUTPUT_NO_ETHERNET,
+	XLATE_TUNNEL_NEIGH_CACHE_MISS,
+	XLATE_TUNNEL_HEADER_BUILD_FAILED,
 	XLATE_MAX,
 };
 #endif
@@ -992,6 +1002,31 @@ struct check_pkt_len_arg {
 };
 #endif
 
+#define OVS_PSAMPLE_COOKIE_MAX_SIZE 16
+/**
+ * enum ovs_pample_attr - Attributes for %OVS_ACTION_ATTR_PSAMPLE
+ * action.
+ *
+ * @OVS_PSAMPLE_ATTR_GROUP: 32-bit number to identify the source of the
+ * sample.
+ * @OVS_PSAMPLE_ATTR_COOKIE: An optional variable-length binary cookie that
+ * contains user-defined metadata. The maximum length is
+ * OVS_PSAMPLE_COOKIE_MAX_SIZE bytes.
+ *
+ * Sends the packet to the psample multicast group with the specified group and
+ * cookie. It is possible to combine this action with the
+ * %OVS_ACTION_ATTR_TRUNC action to limit the size of the sample.
+ */
+enum ovs_psample_attr {
+        OVS_PSAMPLE_ATTR_GROUP = 1,    /* u32 number. */
+        OVS_PSAMPLE_ATTR_COOKIE,       /* Optional, user specified cookie. */
+
+        /* private: */
+        __OVS_PSAMPLE_ATTR_MAX
+};
+
+#define OVS_PSAMPLE_ATTR_MAX (__OVS_PSAMPLE_ATTR_MAX - 1)
+
 /**
  * enum ovs_action_attr - Action types.
  *
@@ -1056,6 +1091,8 @@ struct check_pkt_len_arg {
  * of l3 tunnel flag in the tun_flags field of OVS_ACTION_ATTR_ADD_MPLS
  * argument.
  * @OVS_ACTION_ATTR_DROP: Explicit drop action.
+ * @OVS_ACTION_ATTR_PSAMPLE: Send a sample of the packet to external observers
+ * via psample.
  */
 
 enum ovs_action_attr {
@@ -1085,11 +1122,13 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_CLONE,        /* Nested OVS_CLONE_ATTR_*.  */
 	OVS_ACTION_ATTR_CHECK_PKT_LEN, /* Nested OVS_CHECK_PKT_LEN_ATTR_*. */
 	OVS_ACTION_ATTR_ADD_MPLS,     /* struct ovs_action_add_mpls. */
+	OVS_ACTION_ATTR_DEC_TTL,      /* Nested OVS_DEC_TTL_ATTR_*. */
+	OVS_ACTION_ATTR_DROP,         /* u32 xlate_error. */
+	OVS_ACTION_ATTR_PSAMPLE,      /* Nested OVS_PSAMPLE_ATTR_*. */
 
 #ifndef __KERNEL__
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
-	OVS_ACTION_ATTR_DROP,          /* u32 xlate_error. */
 	OVS_ACTION_ATTR_LB_OUTPUT,     /* u32 bond-id. */
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
@@ -1182,6 +1221,14 @@ struct ovs_zone_limit {
 	__u32 limit;
 	__u32 count;
 };
+
+enum ovs_dec_ttl_attr {
+	OVS_DEC_TTL_ATTR_UNSPEC,
+	OVS_DEC_TTL_ATTR_ACTION,	/* Nested struct nlattr */
+	__OVS_DEC_TTL_ATTR_MAX
+};
+
+#define OVS_DEC_TTL_ATTR_MAX (__OVS_DEC_TTL_ATTR_MAX - 1)
 
 #define OVS_CLONE_ATTR_EXEC      0   /* Specify an u32 value. When nonzero,
 				      * actions in clone will not change flow

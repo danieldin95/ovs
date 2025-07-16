@@ -21,6 +21,7 @@
 #include <errno.h>
 
 #include "byteq.h"
+#include "coverage.h"
 #include "openvswitch/dynamic-string.h"
 #include "fatal-signal.h"
 #include "openvswitch/json.h"
@@ -36,6 +37,8 @@
 #include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(jsonrpc);
+
+COVERAGE_DEFINE(jsonrpc_recv_incomplete);
 
 struct jsonrpc {
     struct stream *stream;
@@ -120,7 +123,8 @@ jsonrpc_run(struct jsonrpc *rpc)
 
     stream_run(rpc->stream);
     while (!ovs_list_is_empty(&rpc->output)) {
-        struct ofpbuf *buf = ofpbuf_from_list(rpc->output.next);
+        struct ovs_list *head = ovs_list_front(&rpc->output);
+        struct ofpbuf *buf = ofpbuf_from_list(head);
         int retval;
 
         retval = stream_send(rpc->stream, buf->data, buf->size);
@@ -128,7 +132,7 @@ jsonrpc_run(struct jsonrpc *rpc)
             rpc->backlog -= retval;
             ofpbuf_pull(buf, retval);
             if (!buf->size) {
-                ovs_list_remove(&buf->list_node);
+                ovs_list_remove(head);
                 rpc->output_count--;
                 ofpbuf_delete(buf);
             }
@@ -339,6 +343,7 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
             size_t chunk;
             int retval;
 
+            byteq_fast_forward(&rpc->input);
             chunk = byteq_headroom(&rpc->input);
             retval = stream_recv(rpc->stream, byteq_head(&rpc->input), chunk);
             if (retval < 0) {
@@ -383,6 +388,10 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
             }
         }
     }
+
+    /* We tried hard but didn't get a complete JSON message within the above
+     * iterations.  We want to know how often we abort for this reason. */
+    COVERAGE_INC(jsonrpc_recv_incomplete);
 
     return EAGAIN;
 }
@@ -728,7 +737,7 @@ jsonrpc_msg_from_json(struct json *json, struct jsonrpc_msg **msgp)
     }
 
     msg = xzalloc(sizeof *msg);
-    msg->method = method ? xstrdup(method->string) : NULL;
+    msg->method = method ? xstrdup(json_string(method)) : NULL;
     msg->params = null_from_json_null(shash_find_and_delete(object, "params"));
     msg->result = null_from_json_null(shash_find_and_delete(object, "result"));
     msg->error = null_from_json_null(shash_find_and_delete(object, "error"));
@@ -1195,7 +1204,7 @@ jsonrpc_session_recv(struct jsonrpc_session *s)
                 jsonrpc_session_send(s, reply);
             } else if (msg->type == JSONRPC_REPLY
                        && msg->id && msg->id->type == JSON_STRING
-                       && !strcmp(msg->id->string, "echo")) {
+                       && !strcmp(json_string(msg->id), "echo")) {
                 /* It's a reply to our echo request.  Suppress it. */
             } else {
                 return msg;
